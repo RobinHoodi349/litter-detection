@@ -1150,8 +1150,8 @@
     {
       "type": "text",
       "id": "dec_label",
-      "x": 980,
-      "y": 103,
+      "x": 982.9857826237526,
+      "y": 101.44689784365676,
       "width": 200,
       "height": 15,
       "text": "Decoder: custom U-Net, Dropout=0.1",
@@ -1169,8 +1169,8 @@
       "opacity": 100,
       "angle": 0,
       "seed": 300005,
-      "version": 2,
-      "versionNonce": 114537662,
+      "version": 118,
+      "versionNonce": 371433739,
       "isDeleted": false,
       "groupIds": [],
       "boundElements": [],
@@ -1181,7 +1181,7 @@
       "index": "aX",
       "frameId": null,
       "roundness": null,
-      "updated": 1774251061389,
+      "updated": 1774264369303,
       "autoResize": true
     },
     {
@@ -1914,11 +1914,16 @@
       "opacity": 100,
       "angle": 0,
       "seed": 300112,
-      "version": 2,
-      "versionNonce": 55175038,
+      "version": 3,
+      "versionNonce": 1563370533,
       "isDeleted": false,
       "groupIds": [],
-      "boundElements": [],
+      "boundElements": [
+        {
+          "id": "dec_a5",
+          "type": "arrow"
+        }
+      ],
       "link": null,
       "locked": false,
       "containerId": null,
@@ -1926,14 +1931,14 @@
       "index": "at",
       "frameId": null,
       "roundness": null,
-      "updated": 1774251061389,
+      "updated": 1774264364475,
       "autoResize": true
     },
     {
       "type": "ellipse",
       "id": "output_el",
-      "x": 983,
-      "y": 50,
+      "x": 982.265625,
+      "y": 22.3671875,
       "width": 190,
       "height": 55,
       "strokeColor": "#047857",
@@ -1945,23 +1950,28 @@
       "opacity": 100,
       "angle": 0,
       "seed": 300120,
-      "version": 2,
-      "versionNonce": 474535778,
+      "version": 98,
+      "versionNonce": 713849189,
       "isDeleted": false,
       "groupIds": [],
-      "boundElements": [],
+      "boundElements": [
+        {
+          "id": "dec_a5",
+          "type": "arrow"
+        }
+      ],
       "link": null,
       "locked": false,
       "index": "au",
       "frameId": null,
       "roundness": null,
-      "updated": 1774251061389
+      "updated": 1774264364475
     },
     {
       "type": "text",
       "id": "output_t",
-      "x": 990,
-      "y": 68,
+      "x": 989.265625,
+      "y": 40.3671875,
       "width": 176,
       "height": 20,
       "text": "Mask: 1ch  HxW  (1x1 Conv)",
@@ -1979,8 +1989,8 @@
       "opacity": 100,
       "angle": 0,
       "seed": 300122,
-      "version": 2,
-      "versionNonce": 1255950270,
+      "version": 97,
+      "versionNonce": 265105099,
       "isDeleted": false,
       "groupIds": [],
       "boundElements": [],
@@ -1991,7 +2001,7 @@
       "index": "av",
       "frameId": null,
       "roundness": null,
-      "updated": 1774251061389,
+      "updated": 1774264357182,
       "autoResize": true
     },
     {
@@ -2446,7 +2456,7 @@
       "x": 1075,
       "y": 120,
       "width": 0,
-      "height": 15,
+      "height": 33.60768628923533,
       "strokeColor": "#047857",
       "backgroundColor": "transparent",
       "fillStyle": "solid",
@@ -2456,8 +2466,8 @@
       "opacity": 100,
       "angle": 0,
       "seed": 300220,
-      "version": 2,
-      "versionNonce": 111961570,
+      "version": 51,
+      "versionNonce": 1706434277,
       "isDeleted": false,
       "groupIds": [],
       "boundElements": [],
@@ -2470,18 +2480,26 @@
         ],
         [
           0,
-          -15
+          -33.60768628923533
         ]
       ],
-      "startBinding": null,
-      "endBinding": null,
+      "startBinding": {
+        "elementId": "final_t",
+        "focus": 0,
+        "gap": 11
+      },
+      "endBinding": {
+        "elementId": "output_el",
+        "focus": 0.023848684210526314,
+        "gap": 9.032738176267237
+      },
       "startArrowhead": null,
       "endArrowhead": "arrow",
       "lastCommittedPoint": null,
       "index": "b06",
       "frameId": null,
       "roundness": null,
-      "updated": 1774251061389
+      "updated": 1774264364995
     },
     {
       "type": "arrow",
