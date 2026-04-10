@@ -37,6 +37,9 @@ from tqdm import tqdm
 
 # ── Hyperparameters (edit freely) ─────────────────────────────────────────────
 
+# Epochen als Messwert statt Zeitlimit, damit jedes Training vergleichbar ist unabhängig von Hardware
+EPOCHEN          = 50           # Maximale Anzahl an Epochen (Training stoppt nach EPOCHEN)
+
 TIME_LIMIT       = 20 * 60   # seconds of training per run
 BATCH_SIZE       = 8
 CROP_SIZE        = 384        # random-crop spatial resolution during training
