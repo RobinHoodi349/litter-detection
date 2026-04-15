@@ -9,18 +9,20 @@ This file IS modified by the agent. Everything is fair game:
   - Batch size, image crop size
   - Any other technique the agent wants to try
 
-Constraint: training stops after TIME_LIMIT seconds so every experiment is
+Constraint: training stops after EPOCHEN epochs so every experiment is
 comparable. The primary metric logged to MLflow is val_iou (higher is better).
 
 Usage:
-    uv run python train.py [--run-name NAME] [--time-limit SECONDS]
+    uv run python train.py [--run-name NAME] [--epochen N] [--model NAME|all]
 """
 
 import argparse
 import json
 import os
+import sqlite3
 import time
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 import mlflow
 import numpy as np
@@ -37,7 +39,13 @@ from tqdm import tqdm
 
 # ── Hyperparameters (edit freely) ─────────────────────────────────────────────
 
-TIME_LIMIT       = 20 * 60   # seconds of training per run
+# Epochen als Messwert statt Zeitlimit, damit jedes Training vergleichbar ist
+# und die MLflow-Kurven direkt pro Epoche gelesen werden koennen.
+EPOCHEN          = 5           # Maximale Anzahl an Epochen
+
+# Legacy-Konstante absichtlich stehen gelassen, damit bestehende Notizen nicht
+# brechen. Das Training selbst wird unten nicht mehr zeitbasiert beendet.
+TIME_LIMIT       = 20 * 60
 BATCH_SIZE       = 8
 CROP_SIZE        = 384        # random-crop spatial resolution during training
 LR               = 8e-4
@@ -53,6 +61,9 @@ POS_WEIGHT       = 5.0        # BCEWithLogitsLoss pos_weight (handles class imba
 DATA_DIR   = Path("data")
 IMAGES_DIR = DATA_DIR / "images"
 MASKS_DIR  = DATA_DIR / "masks"
+MLFLOW_DB = Path("mlflow.db")
+MLFLOW_ARTIFACTS_DIR = Path("mlruns")
+MLFLOW_EXPERIMENT = "litter-segmentation"
 
 
 def load_meta() -> dict:
@@ -684,7 +695,125 @@ def get_device() -> torch.device:
     return torch.device("cpu")
 
 
-def train(run_name: str, time_limit: int):
+def _artifact_suffix(location: str) -> Path | None:
+    """Extract the path suffix behind 'mlruns/' from legacy MLflow locations."""
+    if not location:
+        return None
+
+    normalized = location.replace("\\", "/")
+    if normalized.startswith("file://"):
+        normalized = unquote(urlparse(normalized).path).replace("\\", "/")
+        # Windows file URIs look like "/C:/..."; strip the leading slash back off.
+        if len(normalized) >= 3 and normalized[0] == "/" and normalized[2] == ":":
+            normalized = normalized[1:]
+
+    marker = "mlruns/"
+    idx = normalized.lower().find(marker)
+    if idx == -1:
+        stripped = normalized.lstrip("./").strip("/")
+        return Path() if stripped.lower() == "mlruns" else None
+
+    suffix = normalized[idx + len(marker):].strip("/")
+    return Path(suffix) if suffix else Path()
+
+
+def configure_local_mlflow() -> None:
+    """
+    Keep MLflow on the repo-local SQLite DB and repair legacy artifact paths.
+
+    The repository already contains old runs from another machine with absolute
+    artifact paths. Rewriting them to the local `mlruns/` folder prevents the
+    MLflow UI from failing to fetch artifacts on this machine.
+    """
+    mlflow.set_tracking_uri(f"sqlite:///{MLFLOW_DB.resolve().as_posix()}")
+    MLFLOW_ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    if not MLFLOW_DB.exists():
+        return
+
+    conn = sqlite3.connect(MLFLOW_DB)
+    try:
+        cur = conn.cursor()
+
+        for experiment_id, location in cur.execute(
+            "SELECT experiment_id, artifact_location FROM experiments"
+        ).fetchall():
+            suffix = _artifact_suffix(location)
+            if suffix is None:
+                continue
+
+            desired_location = (MLFLOW_ARTIFACTS_DIR / suffix).resolve().as_uri()
+            if location != desired_location:
+                cur.execute(
+                    "UPDATE experiments SET artifact_location=? WHERE experiment_id=?",
+                    (desired_location, experiment_id),
+                )
+
+        for run_id, artifact_uri in cur.execute(
+            "SELECT run_uuid, artifact_uri FROM runs"
+        ).fetchall():
+            suffix = _artifact_suffix(artifact_uri)
+            if suffix is None:
+                continue
+
+            desired_uri = (MLFLOW_ARTIFACTS_DIR / suffix).resolve().as_uri()
+            if artifact_uri != desired_uri:
+                cur.execute(
+                    "UPDATE runs SET artifact_uri=? WHERE run_uuid=?",
+                    (desired_uri, run_id),
+                )
+
+        conn.commit()
+    except sqlite3.OperationalError:
+        # Frische DBs haben die Tabellen evtl. noch nicht, bevor MLflow sie anlegt.
+        pass
+    finally:
+        conn.close()
+
+
+MODEL_REGISTRY = {
+    # Zentrale Modellliste, damit CLI-Auswahl und Vergleichslaeufe dieselbe
+    # Definition verwenden.
+    "unet": {
+        "label": "UNet",
+        "factory": lambda: UNet(dropout=DROPOUT),
+    },
+    "resnet34": {
+        "label": "ResNet34-pretrained",
+        "factory": lambda: ResNet34UNet(dropout=DROPOUT),
+    },
+    "resnet50": {
+        "label": "ResNet50-pretrained",
+        "factory": lambda: ResNet50UNet(dropout=DROPOUT),
+    },
+    "efficientnetb3": {
+        "label": "EfficientNetB3-pretrained",
+        "factory": lambda: EfficientNetB3UNet(dropout=DROPOUT),
+    },
+    "efficientnetb4": {
+        "label": "EfficientNetB4-pretrained",
+        "factory": lambda: EfficientNetB4UNet(dropout=DROPOUT),
+    },
+}
+
+
+def get_model_names(selection: str) -> list[str]:
+    """Resolve a CLI selection to one or more concrete model names."""
+    if selection == "all":
+        return list(MODEL_REGISTRY.keys())
+    if selection not in MODEL_REGISTRY:
+        raise ValueError(
+            f"Unknown model '{selection}'. Available: {', '.join(['all', *MODEL_REGISTRY.keys()])}"
+        )
+    return [selection]
+
+
+def train(run_name: str, epochen: int, model_name: str):
+    if epochen < 1:
+        raise ValueError("epochen must be >= 1")
+    if model_name not in MODEL_REGISTRY:
+        raise ValueError(f"model_name must be one of: {', '.join(MODEL_REGISTRY.keys())}")
+
     device = get_device()
     print(f"Device: {device}")
 
@@ -702,9 +831,13 @@ def train(run_name: str, time_limit: int):
                               persistent_workers=True)
 
     # ── Model ─────────────────────────────────────────────────────────────
-    model = ResNet34UNet(dropout=DROPOUT).to(device)
+    # Das Modell wird jetzt ueber die Registry gewaehlt, damit alle
+    # Architekturen mit identischem Trainingsablauf verglichen werden koennen.
+    model_info = MODEL_REGISTRY[model_name]
+    model = model_info["factory"]().to(device)
 
     total_params = sum(p.numel() for p in model.parameters())
+    print(f"Model: {model_name}")
     print(f"Model parameters: {total_params:,}")
 
     # ── Optimizer + Schedule ──────────────────────────────────────────────
@@ -714,20 +847,31 @@ def train(run_name: str, time_limit: int):
         optimizer,
         max_lr=LR,
         steps_per_epoch=len(train_loader),
-        epochs=9999,          # effectively unlimited; time-budget controls stop
+        # Der Scheduler muss dieselbe Epochenzahl kennen wie das Training,
+        # sonst passt die LR-Kurve nicht mehr zum echten Run.
+        epochs=epochen,
         pct_start=0.05,
     )
     criterion = CombinedLoss(pos_weight=pos_weight).to(device)
 
     # ── MLflow ────────────────────────────────────────────────────────────
-    mlflow.set_experiment("litter-segmentation")
+    configure_local_mlflow()
+    if mlflow.get_experiment_by_name(MLFLOW_EXPERIMENT) is None:
+        # Eigene Artifact-Location setzen, damit neue Runs nicht von impliziten
+        # oder rechnerabhaengigen Default-Pfaden abhaengen.
+        mlflow.create_experiment(
+            MLFLOW_EXPERIMENT,
+            artifact_location=MLFLOW_ARTIFACTS_DIR.resolve().as_uri(),
+        )
+    mlflow.set_experiment(MLFLOW_EXPERIMENT)
     with mlflow.start_run(run_name=run_name):
         mlflow.log_params({
+            "model_name":        model_name,
             "batch_size":        BATCH_SIZE,
             "crop_size":         CROP_SIZE,
             "lr":                LR,
             "weight_decay":      WEIGHT_DECAY,
-            "encoder_channels":  "ResNet34-pretrained",
+            "encoder_channels":  model_info["label"],
             "decoder_channels":  str(DECODER_CHANNELS),
             "dropout":           DROPOUT,
             "pos_weight":        pos_weight,
@@ -736,24 +880,20 @@ def train(run_name: str, time_limit: int):
             "loss":              "BCE+Dice",
             "total_params":      total_params,
             "device":            str(device),
-            "time_limit_s":      time_limit,
+            "epochs":            epochen,
         })
 
         t0 = time.time()
-        step = 0
-        epoch = 0
         best_val_iou = 0.0
 
-        while True:
-            epoch += 1
+        # Die Schleife ist jetzt explizit epochenbasiert statt indirekt über
+        # einen Abbruch mitten in einer while-Schleife.
+        for epoch in range(1, epochen + 1):
             model.train()
             train_loss = 0.0
             train_iou  = 0.0
 
             for images, masks in train_loader:
-                if time.time() - t0 > time_limit:
-                    break
-
                 images = images.to(device, non_blocking=True)
                 masks  = masks.to(device,  non_blocking=True)
 
@@ -767,53 +907,54 @@ def train(run_name: str, time_limit: int):
 
                 train_loss += loss.item()
                 train_iou  += compute_iou(logits, masks)
-                step += 1
 
-            else: #edu: see https://docs.python.org/3/reference/compound_stmts.html#for
-                # ── Validation ────────────────────────────────────────────
-                model.eval()
-                val_loss = 0.0
-                val_iou  = 0.0
-                with torch.no_grad():
-                    for images, masks in val_loader:
-                        images = images.to(device, non_blocking=True)
-                        masks  = masks.to(device,  non_blocking=True)
-                        logits = model(images)
-                        val_loss += criterion(logits, masks).item()
-                        val_iou  += compute_iou(logits, masks)
+            # ── Validation ────────────────────────────────────────────
+            model.eval()
+            val_loss = 0.0
+            val_iou  = 0.0
+            with torch.no_grad():
+                for images, masks in val_loader:
+                    images = images.to(device, non_blocking=True)
+                    masks  = masks.to(device,  non_blocking=True)
+                    logits = model(images)
+                    val_loss += criterion(logits, masks).item()
+                    val_iou  += compute_iou(logits, masks)
 
-                n_train = len(train_loader)
-                n_val   = len(val_loader)
-                elapsed = time.time() - t0
+            n_train = len(train_loader)
+            n_val   = len(val_loader)
+            elapsed = time.time() - t0
 
-                metrics = {
-                    "train_loss": train_loss / max(n_train, 1),
-                    "train_iou":  train_iou  / max(n_train, 1),
-                    "val_loss":   val_loss   / max(n_val,   1),
-                    "val_iou":    val_iou    / max(n_val,   1),
-                    "epoch":      epoch,
-                    "elapsed_s":  elapsed,
-                    "lr":         scheduler.get_last_lr()[0],
-                }
-                mlflow.log_metrics(metrics, step=step)
+            metrics = {
+                "train_loss": train_loss / max(n_train, 1),
+                "train_iou":  train_iou  / max(n_train, 1),
+                "val_loss":   val_loss   / max(n_val,   1),
+                "val_iou":    val_iou    / max(n_val,   1),
+                "epoch":      epoch,
+                "elapsed_s":  elapsed,
+                "lr":         scheduler.get_last_lr()[0],
+            }
+            # MLflow-Step ebenfalls auf Epoche umstellen, damit UI und Logging
+            # dieselbe Zeitskala verwenden.
+            mlflow.log_metrics(metrics, step=epoch)
 
-                if val_iou / max(n_val, 1) > best_val_iou:
-                    best_val_iou = val_iou / max(n_val, 1)
-                    torch.save(model.state_dict(), "best_model.pth")
-                    mlflow.log_artifact("best_model.pth")
+            if val_iou / max(n_val, 1) > best_val_iou:
+                best_val_iou = val_iou / max(n_val, 1)
+                # Pro Modell eigener Dateiname, damit Vergleichslaeufe einander
+                # die besten Gewichte nicht ueberschreiben.
+                best_model_path = f"best_model_{model_name}.pth"
+                torch.save(model.state_dict(), best_model_path)
+                mlflow.log_artifact(best_model_path)
 
-                print(
-                    f"epoch {epoch:3d}  "
-                    f"train_loss={metrics['train_loss']:.4f}  "
-                    f"train_iou={metrics['train_iou']:.4f}  "
-                    f"val_loss={metrics['val_loss']:.4f}  "
-                    f"val_iou={metrics['val_iou']:.4f}  "
-                    f"[{elapsed:.0f}s]"
-                )
-                continue  # keep outer while going
-            break  # inner for-loop broke early (time limit)
+            print(
+                f"epoch {epoch:3d}  "
+                f"train_loss={metrics['train_loss']:.4f}  "
+                f"train_iou={metrics['train_iou']:.4f}  "
+                f"val_loss={metrics['val_loss']:.4f}  "
+                f"val_iou={metrics['val_iou']:.4f}  "
+                f"[{elapsed:.0f}s]"
+            )
 
-        mlflow.log_metric("best_val_iou", best_val_iou)
+        mlflow.log_metric("best_val_iou", best_val_iou, step=epochen)
         print(f"\nBest val_iou: {best_val_iou:.4f}")
         print("Run complete.")
 
@@ -822,7 +963,18 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-name",   default="baseline",
                         help="MLflow run name")
-    parser.add_argument("--time-limit", type=int, default=TIME_LIMIT,
-                        help="Training time budget in seconds")
+    parser.add_argument("--epochen", type=int, default=EPOCHEN,
+                        help="Number of training epochs")
+    parser.add_argument(
+        "--model",
+        default="resnet34",
+        help="Model to train: all, unet, resnet34, resnet50, efficientnetb3, efficientnetb4",
+    )
     args = parser.parse_args()
-    train(run_name=args.run_name, time_limit=args.time_limit)
+
+    selected_models = get_model_names(args.model)
+    for model_name in selected_models:
+        # Bei Sammellaeufen einen eindeutigen Run-Namen pro Modell erzeugen,
+        # damit MLflow die Vergleichslaeufe sauber auseinanderhalten kann.
+        run_name = args.run_name if len(selected_models) == 1 else f"{args.run_name}-{model_name}"
+        train(run_name=run_name, epochen=args.epochen, model_name=model_name)
