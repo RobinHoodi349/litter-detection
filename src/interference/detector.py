@@ -26,7 +26,7 @@ from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.semconv.resource import ResourceAttributes
 from dotenv import load_dotenv
-from model_train.train import *
+from train import *
 
 # ── Inference setup ──────────────────────────────────────────────────────────
 load_dotenv("../.env")
