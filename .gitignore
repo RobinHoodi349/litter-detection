@@ -8,3 +8,4 @@ findings.md
 # generic training checkpoint (named checkpoints are tracked)
 best_model.pth
 .env
+mlflow.db
