@@ -12,7 +12,8 @@ class Settings:
     DROPOUT:float = 0.1
     FRAME_MAX_AGE_SECONDS:int = 1
     PROCESSING_TIMEOUT_SECONDS:int = 5
-
+    THRESHOLD:float = 0.8
+    
     # Zenoh config
     ZENOH_ROUTER:str =  "tcp/localhost:7447"
     topic_frame:str = "litter/frame"

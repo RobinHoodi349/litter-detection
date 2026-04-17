@@ -129,7 +129,7 @@ def inference(frame_bytes: bytes):
                     # Für binäre Segmentierung: Sigmoid anwenden, um Wahrscheinlichkeiten zu bekommen
                     mask_probabilities = torch.sigmoid(output).squeeze(0).squeeze(0).cpu().numpy()
                     # Optional: Threshold anwenden, um binäre Maske zu bekommen (z.B. > 0.5)
-                    mask_binary = (mask_probabilities > 0.5).astype(np.uint8)
+                    mask_binary = (mask_probabilities > settings.THRESHOLD).astype(np.uint8)
                 else:
                     mask_probabilities = None
                     mask_binary = None
