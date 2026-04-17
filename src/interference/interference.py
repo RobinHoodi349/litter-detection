@@ -1,6 +1,10 @@
 import sys
 from pathlib import Path
-sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SRC_ROOT = PROJECT_ROOT / "src"
+AUTO_RESEARCH_DIR = PROJECT_ROOT / "auto-research"
+sys.path.insert(0, str(SRC_ROOT))
+sys.path.insert(0, str(AUTO_RESEARCH_DIR))
 
 from config import Settings
 from train import *
@@ -9,7 +13,6 @@ import zenoh
 import torch
 import numpy as np
 from collections import deque
-from pathlib import Path
 import threading
 import time
 import cv2
@@ -60,9 +63,7 @@ def load_model():
     logging.info(f"Loading model: {settings.MODEL_NAME} on device: {device}")
     
     # Resolve checkpoint path relative to the project root
-    script_dir = Path(__file__).resolve().parent
-    project_root = script_dir.parent.parent
-    CHECKPOINT = project_root / settings.MODEL_NAME
+    CHECKPOINT = PROJECT_ROOT / settings.MODEL_NAME
     
     if CHECKPOINT.exists():
         model = settings.MODEL_CLASS(dropout=settings.DROPOUT).to(device)

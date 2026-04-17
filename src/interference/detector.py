@@ -26,11 +26,15 @@ from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.semconv.resource import ResourceAttributes
 from dotenv import load_dotenv
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+AUTO_RESEARCH_DIR = PROJECT_ROOT / "auto-research"
+sys.path.insert(0, str(AUTO_RESEARCH_DIR))
 from train import *
 
 # ── Inference setup ──────────────────────────────────────────────────────────
-load_dotenv("../.env")
-MODEL_NAME = os.getenv("MODEL_NAME", "best_efficientnetb4")
+load_dotenv(PROJECT_ROOT / ".env")
+MODEL_NAME = os.getenv("MODEL_NAME", "models/checkpoints/best_efficientnetb4.pth")
 print(f"Using model: {MODEL_NAME}")
 
 # ── Logging setup ────────────────────────────────────────────────────────────
@@ -104,13 +108,19 @@ def load_model():
     global model, device
     logger.info(f"Loading {MODEL_NAME} model…")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    CHECKPOINT = "../best_efficientnetb4.pth"
+    checkpoint = Path(MODEL_NAME)
+    if checkpoint.suffix != ".pth":
+        checkpoint = checkpoint.with_suffix(".pth")
+    if not checkpoint.is_absolute():
+        if checkpoint.parts[:2] != ("models", "checkpoints"):
+            checkpoint = Path("models") / "checkpoints" / checkpoint.name
+        checkpoint = PROJECT_ROOT / checkpoint
+    CHECKPOINT = checkpoint
     MODEL_CLASS = EfficientNetB4UNet
 
-    p = Path(CHECKPOINT)
-    if p.exists():
+    if CHECKPOINT.exists():
         model = MODEL_CLASS(dropout=DROPOUT).to(device)
-        model.load_state_dict(torch.load(p, map_location=device))
+        model.load_state_dict(torch.load(CHECKPOINT, map_location=device))
         model.eval()
         n = sum(par.numel() for par in model.parameters())
         print(f"Loaded {CHECKPOINT} ({MODEL_CLASS.__name__}) on {device}  ({n:,} params)")

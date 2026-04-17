@@ -1,10 +1,12 @@
 '''Configuration for the Litter Detector application''' 
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+REPO_ROOT = Path(__file__).resolve().parents[2]
+AUTO_RESEARCH_DIR = REPO_ROOT / "auto-research"
+sys.path.insert(0, str(AUTO_RESEARCH_DIR))
 
 import train
-MODEL_NAME = "best_efficientnetb4.pth"
+MODEL_NAME = "models/checkpoints/best_efficientnetb4.pth"
 MODEL_CLASS = train.EfficientNetB4UNet
 DROPOUT = 0.1
 
