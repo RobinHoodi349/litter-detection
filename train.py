@@ -38,14 +38,20 @@ from tqdm import tqdm
 # ── Hyperparameters (edit freely) ─────────────────────────────────────────────
 
 TIME_LIMIT       = 20 * 60   # seconds of training per run
-BATCH_SIZE       = 8
-CROP_SIZE        = 384        # random-crop spatial resolution during training
+BATCH_SIZE       = 2
+CROP_SIZE        = 256        # random-crop spatial resolution during training
 LR               = 8e-4
 WEIGHT_DECAY     = 1e-4
 ENCODER_CHANNELS = [64, 128, 256, 512]   # U-Net encoder stage widths
 DECODER_CHANNELS = [256, 128, 64, 32]    # U-Net decoder stage widths
 DROPOUT          = 0.1
 POS_WEIGHT       = 5.0        # BCEWithLogitsLoss pos_weight (handles class imbalance)
+
+USE_GROUND_ROI  = True
+GROUND_ROI_TOP  = 0.4
+
+DEFAULT_THRESHOLD = 0.5
+THRESHOLD_CANDIDATES = [0.3, 0.4, 0.5, 0.6, 0.7]
                                # override with value from data/meta.json
 
 # ── Data ──────────────────────────────────────────────────────────────────────
@@ -60,6 +66,20 @@ def load_meta() -> dict:
     if p.exists():
         return json.loads(p.read_text())
     return {}
+
+def crop_ground_roi(image: np.ndarray, mask: np.ndarray, roi_top: float):
+    h = image.shape[0]
+    y0 = int(h * roi_top)
+
+    cropped_image = image[y0:, :]
+    cropped_mask  = mask[y0:, :]
+     # Safety: falls durch den Crop kein Müll mehr im Bild ist → kein Crop
+    if cropped_mask.sum() ==0:
+        return image, mask
+    
+    return cropped_image, cropped_mask
+
+
 
 
 class LitterDataset(Dataset):
@@ -99,6 +119,9 @@ class LitterDataset(Dataset):
         image = np.array(Image.open(IMAGES_DIR / f"{stem}.jpg").convert("RGB"))
         mask  = (np.array(Image.open(MASKS_DIR / f"{stem}.png")) > 127).astype(np.float32)
 
+        if USE_GROUND_ROI:
+            image, mask = crop_ground_roi(image, mask, GROUND_ROI_TOP)
+                                              
         out = self.transform(image=image, mask=mask)
         return out["image"], out["mask"].unsqueeze(0)   # (3,H,W), (1,H,W)
 
@@ -635,7 +658,85 @@ class EfficientNetB4UNet(nn.Module):
         d = self.final_up(d)
         d = self.final_conv(d)
         return self.head(d)                         # 1 ch,   H/1
+    
+class EfficientNetB1UNet(nn.Module):
+    def __init__(self, dropout: float = DROPOUT):
+        super().__init__()
 
+        backbone = tv_models.efficientnet_b1(
+            weights=tv_models.EfficientNet_B1_Weights.IMAGENET1K_V1
+        )
+        features = backbone.features
+
+        # Encoder Stages (ähnlich wie B3, aber andere Channels)
+        self.stage0 = features[0]    # ~32 ch, H/2
+        self.stage1 = features[1]    # ~16 ch
+        self.stage2 = features[2]    # ~24 ch
+        self.stage3 = features[3]    # ~40 ch
+        self.stage4 = features[4]    # ~80 ch
+        self.stage5 = features[5]    # ~112 ch
+        self.stage6 = features[6]    # ~192 ch
+        self.stage7 = features[7]    # ~320 ch (bottleneck)
+
+        # Freeze BN
+        for m in self.modules():
+            if isinstance(m, nn.BatchNorm2d):
+                m.weight.requires_grad_(False)
+                m.bias.requires_grad_(False)
+
+        # Decoder
+        self.up1 = nn.ConvTranspose2d(320, 112, 2, 2)
+        self.dec1 = ConvBlock(112 + 112, 256, dropout)
+
+        self.up2 = nn.ConvTranspose2d(256, 128, 2, 2)
+        self.dec2 = ConvBlock(128 + 40, 128, dropout)
+
+        self.up3 = nn.ConvTranspose2d(128, 64, 2, 2)
+        self.dec3 = ConvBlock(64 + 24, 64, dropout)
+
+        self.up4 = nn.ConvTranspose2d(64, 32, 2, 2)
+        self.dec4 = ConvBlock(32 + 16, 32, dropout)
+
+        self.final_up = nn.ConvTranspose2d(32, 16, 2, 2)
+        self.final_conv = ConvBlock(16, 16, dropout)
+
+        self.head = nn.Conv2d(16, 1, 1)
+
+    def _align(self, x, ref):
+        if x.shape[2:] != ref.shape[2:]:
+            x = F.interpolate(x, size=ref.shape[2:], mode="bilinear", align_corners=False)
+        return x
+
+    def forward(self, x):
+        s0 = self.stage0(x)
+        s1 = self.stage1(s0)
+        s2 = self.stage2(s1)
+        s3 = self.stage3(s2)
+        s4 = self.stage4(s3)
+        s5 = self.stage5(s4)
+        s6 = self.stage6(s5)
+        s7 = self.stage7(s6)
+
+        d = self.up1(s7)
+        d = self._align(d, s5)
+        d = self.dec1(torch.cat([d, s5], dim=1))
+
+        d = self.up2(d)
+        d = self._align(d, s3)
+        d = self.dec2(torch.cat([d, s3], dim=1))
+
+        d = self.up3(d)
+        d = self._align(d, s2)
+        d = self.dec3(torch.cat([d, s2], dim=1))
+
+        d = self.up4(d)
+        d = self._align(d, s1)
+        d = self.dec4(torch.cat([d, s1], dim=1))
+
+        d = self.final_up(d)
+        d = self.final_conv(d)
+
+        return self.head(d)
 
 # ── Loss ──────────────────────────────────────────────────────────────────────
 
@@ -702,7 +803,7 @@ def train(run_name: str, time_limit: int):
                               persistent_workers=True)
 
     # ── Model ─────────────────────────────────────────────────────────────
-    model = ResNet34UNet(dropout=DROPOUT).to(device)
+    model = EfficientNetB1UNet(dropout=DROPOUT).to(device)
 
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Model parameters: {total_params:,}")
@@ -723,11 +824,12 @@ def train(run_name: str, time_limit: int):
     mlflow.set_experiment("litter-segmentation")
     with mlflow.start_run(run_name=run_name):
         mlflow.log_params({
+            "model_name": "EfficientNetB1UNet",
             "batch_size":        BATCH_SIZE,
             "crop_size":         CROP_SIZE,
             "lr":                LR,
             "weight_decay":      WEIGHT_DECAY,
-            "encoder_channels":  "ResNet34-pretrained",
+            "encoder_channels":  "EfficientNetB1-pretrained",
             "decoder_channels":  str(DECODER_CHANNELS),
             "dropout":           DROPOUT,
             "pos_weight":        pos_weight,
@@ -737,6 +839,8 @@ def train(run_name: str, time_limit: int):
             "total_params":      total_params,
             "device":            str(device),
             "time_limit_s":      time_limit,
+            "use_ground_roi":    USE_GROUND_ROI,
+            "ground_roi_top":     GROUND_ROI_TOP,
         })
 
         t0 = time.time()
@@ -768,23 +872,41 @@ def train(run_name: str, time_limit: int):
                 train_loss += loss.item()
                 train_iou  += compute_iou(logits, masks)
                 step += 1
+                if step % 10 == 0:
+                    elapsed = time.time() - t0
+                    print(f"step={step}  loss={loss.item():.4f}  elapsed={elapsed:.0f}s")
 
             else: #edu: see https://docs.python.org/3/reference/compound_stmts.html#for
                 # ── Validation ────────────────────────────────────────────
                 model.eval()
                 val_loss = 0.0
                 val_iou  = 0.0
+
+                # Für Threshold-Tuning
+                threshold_scores = {t: 0.0 for t in THRESHOLD_CANDIDATES}
                 with torch.no_grad():
                     for images, masks in val_loader:
                         images = images.to(device, non_blocking=True)
                         masks  = masks.to(device,  non_blocking=True)
                         logits = model(images)
                         val_loss += criterion(logits, masks).item()
-                        val_iou  += compute_iou(logits, masks)
+
+                        # Standard IoU (z. B. für Anzeige)
+                        val_iou += compute_iou(logits, masks, threshold=DEFAULT_THRESHOLD)
+
+                        # Threshold-Tuning
+                        for t in THRESHOLD_CANDIDATES:
+                            threshold_scores[t] += compute_iou(logits, masks, threshold=t)
 
                 n_train = len(train_loader)
                 n_val   = len(val_loader)
                 elapsed = time.time() - t0
+                # Durchschnitt berechnen
+                threshold_scores = {t: v / max(n_val, 1) for t, v in threshold_scores.items()}
+
+                # besten Threshold finden
+                best_threshold = max(threshold_scores, key=threshold_scores.get)
+                best_threshold_iou = threshold_scores[best_threshold]
 
                 metrics = {
                     "train_loss": train_loss / max(n_train, 1),
@@ -794,11 +916,13 @@ def train(run_name: str, time_limit: int):
                     "epoch":      epoch,
                     "elapsed_s":  elapsed,
                     "lr":         scheduler.get_last_lr()[0],
+                    "best_threshold": best_threshold,
+                    "best_threshold_iou": best_threshold_iou,
                 }
                 mlflow.log_metrics(metrics, step=step)
 
-                if val_iou / max(n_val, 1) > best_val_iou:
-                    best_val_iou = val_iou / max(n_val, 1)
+                if best_threshold_iou > best_val_iou:
+                    best_val_iou = best_threshold_iou
                     torch.save(model.state_dict(), "best_model.pth")
                     mlflow.log_artifact("best_model.pth")
 
@@ -809,6 +933,8 @@ def train(run_name: str, time_limit: int):
                     f"val_loss={metrics['val_loss']:.4f}  "
                     f"val_iou={metrics['val_iou']:.4f}  "
                     f"[{elapsed:.0f}s]"
+                    f"best_threshold={best_threshold:.2f}  "
+                    f"best_threshold_iou={best_threshold_iou:.4f}"
                 )
                 continue  # keep outer while going
             break  # inner for-loop broke early (time limit)
