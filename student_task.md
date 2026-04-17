@@ -80,6 +80,15 @@ Optional:
 ---
 
 ## Camera-Sensor / Kamerasensor
+## Starting Questions for finding Improvements
+
+Here are some starting questions to assess the current approach:
+
+1. Is a time cap a good idea while comparing different encoder backbones?
+2. Is the efficientNet_B4 too big for the amount of training data?
+3. How good is the labeling of the data?
+
+## Camera-Sensor
 
 - Use either the image from the robodog camera or the image from the webcam
 
