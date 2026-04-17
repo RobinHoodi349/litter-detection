@@ -140,3 +140,21 @@ session.put("robot/cmd/estop", estop.model_dump_json())
 - [Agentic LLM-based robotic systems for real-world applications: a review on their agenticness and ethics](https://pdfs.semanticscholar.org/e126/28d38ffb0c5e290e6519a53c4b25d128c903.pdf?_gl=1*z4di2t*_gcl_au*MTkzNjM3Mzc3NS4xNzcyODA2MTIw*_ga*MTg0NDYyNDAwNy4xNzcyODA2MTIw*_ga_H7P4ZT52H5*czE3NzY0MjcxNTUkbzckZzAkdDE3NzY0MjcxNTUkajYwJGwwJGgw)
 - [Towards Embodied Agentic AI: Review and Classification of LLM- and VLM-Driven Robot Autonomy and Interaction](https://www.semanticscholar.org/reader/f571b998a35c0d2d04a41d4fb62feb77ca94fbd5)
 - [Distributed AI Agents for Cognitive Underwater Robot Autonomy](https://www.semanticscholar.org/reader/120b93daa1a5a7d8324f9d6eb6374177db0402ee)
+
+---
+
+# Doku Arbeitspaket 2
+## Aufgaben:
+1. [] Legen Sie fest, welche Agenten Sie benötigen, und definieren Sie die Aufgaben, die diese ausführen sollen. 
+2. [] Legen Sie die Verbindung zwischen Roboter und Agenten fest.
+3. [] Überlegen Sie sich, welche parallelen Aufgaben möglicherweise aktiv sind, welche Bewegungsmuster erforderlich sind, wie der Roboter gestartet und gestoppt wird und wie die Interaktion mit einem Menschen aussehen soll.
+4. [] Recherchieren Sie Lösungen, um Ihre Funktionalität zu erreichen (z. B. Sprachverarbeitung).
+5. [] Integrieren Sie den Roboter in Ihr Agentensystem.
+
+Fragen, die Sie sich stellen könnten:
+
+- Welche Komponente sollte das Szenario planen?
+- Welche Komponente beobachtet die aktuelle Ausführung?
+- Wie wird ein Plan dargestellt?
+
+### Aufgabe 1:
