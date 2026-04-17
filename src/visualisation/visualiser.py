@@ -23,11 +23,10 @@ from pathlib import Path
 import threading
 import time
 
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
+from config import Settings
 
-import config
-
+settings = Settings()
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
@@ -35,6 +34,7 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 logger = logging.getLogger("visualiser")
+
 
 # Display mode constants
 MODE_BINARY = 0
@@ -52,6 +52,10 @@ latest_mask_probabilities = None
 latest_visualization = None
 data_ready = threading.Event()
 
+# Frame dimensions (will be updated when frame arrives)
+frame_width = 640
+frame_height = 480
+
 
 def colormap_heatmap(probabilities: np.ndarray) -> np.ndarray:
     """
@@ -63,10 +67,12 @@ def colormap_heatmap(probabilities: np.ndarray) -> np.ndarray:
     Returns:
         heatmap: RGB heatmap image
     """
-    # Normalize to 0-255
-    heatmap_uint8 = (probabilities * 255).astype(np.uint8)
+    # Ensure probabilities are in 0-1 range and convert to uint8
+    prob_clipped = np.clip(probabilities, 0, 1)
+    heatmap_uint8 = (prob_clipped * 255).astype(np.uint8)
     
     # Apply colormap (COLORMAP_JET: blue -> cyan -> green -> yellow -> red)
+    # Use COLORMAP_TURBO for better performance
     heatmap_bgr = cv2.applyColorMap(heatmap_uint8, cv2.COLORMAP_JET)
     heatmap_rgb = cv2.cvtColor(heatmap_bgr, cv2.COLOR_BGR2RGB)
     
@@ -103,9 +109,24 @@ def visualize_binary_mask(mask_binary: np.ndarray, frame_shape: tuple = None) ->
 
 def on_frame(sample: zenoh.Sample):
     """Zenoh callback for frame reception."""
-    global latest_frame
+    global latest_frame, frame_width, frame_height
     try:
-        latest_frame = bytes(sample.payload)
+        payload = bytes(sample.payload)
+        latest_frame = payload
+        
+        # Extract frame dimensions efficiently (only decode size, not full image)
+        try:
+            frame_arr = np.frombuffer(payload, np.uint8)
+            # Use IMREAD_UNCHANGED to avoid full decoding overhead, but we still decode
+            # A better approach: try to read just enough bytes to get JPEG header info
+            frame_decoded = cv2.imdecode(frame_arr, cv2.IMREAD_COLOR)
+            if frame_decoded is not None:
+                frame_height, frame_width = frame_decoded.shape[:2]
+        except Exception as e:
+            logger.debug(f"Could not extract frame dimensions: {e}")
+            # Use default dimensions if extraction fails
+            pass
+        
         data_ready.set()
     except Exception as e:
         logger.exception(f"Error receiving frame: {e}")
@@ -152,6 +173,7 @@ def on_visualization(sample: zenoh.Sample):
 def display_loop():
     """Main display loop."""
     global current_mode, latest_frame, latest_mask_binary, latest_mask_probabilities, latest_visualization
+    global frame_width, frame_height
     
     window_name = "Litter Detection Visualization"
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
@@ -168,57 +190,99 @@ def display_loop():
     logger.info("  'v' - Visualization overlay view")
     logger.info("  'q' - Quit")
     
+    # Cache for reshaped masks to avoid repeated reshape operations
+    cached_binary_mask = None
+    cached_probs_mask = None
+    cached_dimensions = None
+    
     while True:
-        data_ready.wait(timeout=0.1)
+        data_ready.wait(timeout=0.05)  # Reduced timeout for better responsiveness
         
         with display_lock:
-            if current_mode == MODE_BINARY and latest_mask_binary is not None:
-                try:
-                    # Reshape binary mask back to 2D
-                    mask_binary = latest_mask_binary.reshape(384, 384)
-                    display_image = visualize_binary_mask(mask_binary)
-                except Exception as e:
-                    logger.error(f"Error reshaping binary mask: {e}")
-                    display_image = np.zeros((384, 384, 3), dtype=np.uint8)
+            display_image = None
+            
+            try:
+                if current_mode == MODE_BINARY and latest_mask_binary is not None:
+                    # Check if cached dimensions match current frame dimensions
+                    if cached_dimensions != (frame_height, frame_width):
+                        # Reshape to 1D first, then calculate actual dimensions
+                        mask_size = len(latest_mask_binary)
+                        # Try to reshape to frame dimensions
+                        if mask_size == frame_height * frame_width:
+                            cached_binary_mask = latest_mask_binary.reshape(frame_height, frame_width)
+                            cached_dimensions = (frame_height, frame_width)
+                        else:
+                            # Fallback: try to find square dimensions
+                            sqrt_size = int(np.sqrt(mask_size))
+                            if sqrt_size * sqrt_size == mask_size:
+                                cached_binary_mask = latest_mask_binary.reshape(sqrt_size, sqrt_size)
+                                cached_dimensions = (sqrt_size, sqrt_size)
+                            else:
+                                # Last resort: reshape to approximate square
+                                approx_dim = round(np.sqrt(mask_size))
+                                logger.warning(f"Mask size {mask_size} doesn't match frame {frame_height}x{frame_width}, attempting reshape to ~{approx_dim}x{approx_dim}")
+                                continue
                     
-            elif current_mode == MODE_PROBABILITY and latest_mask_probabilities is not None:
-                try:
-                    # Reshape probability mask back to 2D
-                    mask_probs = latest_mask_probabilities.reshape(384, 384)
-                    display_image = colormap_heatmap(mask_probs)
-                except Exception as e:
-                    logger.error(f"Error reshaping probability mask: {e}")
-                    display_image = np.zeros((384, 384, 3), dtype=np.uint8)
+                    if cached_binary_mask is not None:
+                        display_image = visualize_binary_mask(cached_binary_mask)
+                        
+                elif current_mode == MODE_PROBABILITY and latest_mask_probabilities is not None:
+                    # Check if cached dimensions match current frame dimensions
+                    if cached_dimensions != (frame_height, frame_width):
+                        # Reshape to 1D first, then calculate actual dimensions
+                        mask_size = len(latest_mask_probabilities)
+                        # Try to reshape to frame dimensions
+                        if mask_size == frame_height * frame_width:
+                            cached_probs_mask = latest_mask_probabilities.reshape(frame_height, frame_width)
+                            cached_dimensions = (frame_height, frame_width)
+                        else:
+                            # Fallback: try to find square dimensions
+                            sqrt_size = int(np.sqrt(mask_size))
+                            if sqrt_size * sqrt_size == mask_size:
+                                cached_probs_mask = latest_mask_probabilities.reshape(sqrt_size, sqrt_size)
+                                cached_dimensions = (sqrt_size, sqrt_size)
+                            else:
+                                logger.warning(f"Probability mask size {mask_size} doesn't match frame {frame_height}x{frame_width}")
+                                continue
                     
-            elif current_mode == MODE_VISUALIZATION and latest_visualization is not None:
-                display_image = cv2.cvtColor(latest_visualization, cv2.COLOR_BGR2RGB)
-            else:
-                display_image = np.zeros((384, 384, 3), dtype=np.uint8)
+                    if cached_probs_mask is not None:
+                        display_image = colormap_heatmap(cached_probs_mask)
+                        
+                elif current_mode == MODE_VISUALIZATION and latest_visualization is not None:
+                    display_image = cv2.cvtColor(latest_visualization, cv2.COLOR_BGR2RGB)
+                
+                if display_image is None:
+                    display_image = np.zeros((frame_height, frame_width, 3), dtype=np.uint8)
+                    
+            except Exception as e:
+                logger.error(f"Error processing display data: {e}")
+                display_image = np.zeros((frame_height, frame_width, 3), dtype=np.uint8)
         
-        # Add text overlay with current mode
-        display_with_text = display_image.copy()
-        cv2.putText(
-            display_with_text,
-            f"Mode: {mode_names[current_mode]}",
-            (10, 30),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.7,
-            (255, 255, 255),
-            2,
-        )
-        cv2.putText(
-            display_with_text,
-            "b=Binary | p=Probability | v=Visualization | q=Quit",
-            (10, 360),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            (255, 255, 255),
-            1,
-        )
-        
-        # Convert RGB to BGR for OpenCV display
-        display_bgr = cv2.cvtColor(display_with_text, cv2.COLOR_RGB2BGR)
-        cv2.imshow(window_name, display_bgr)
+        if display_image is not None:
+            # Add text overlay with current mode
+            display_with_text = display_image.copy()
+            cv2.putText(
+                display_with_text,
+                f"Mode: {mode_names[current_mode]}",
+                (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (255, 255, 255),
+                2,
+            )
+            cv2.putText(
+                display_with_text,
+                "b=Binary | p=Probability | v=Visualization | q=Quit",
+                (10, frame_height - 20),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (255, 255, 255),
+                1,
+            )
+            
+            # Convert RGB to BGR for OpenCV display
+            display_bgr = cv2.cvtColor(display_with_text, cv2.COLOR_RGB2BGR)
+            cv2.imshow(window_name, display_bgr)
         
         # Handle keyboard input (non-blocking)
         key = cv2.waitKey(1) & 0xFF
@@ -228,10 +292,12 @@ def display_loop():
         elif key == ord('b'):
             with display_lock:
                 current_mode = MODE_BINARY
+                cached_dimensions = None  # Invalidate cache on mode switch
             logger.info("Switched to Binary Mask view")
         elif key == ord('p'):
             with display_lock:
                 current_mode = MODE_PROBABILITY
+                cached_dimensions = None  # Invalidate cache on mode switch
             logger.info("Switched to Probability Heatmap view")
         elif key == ord('v'):
             with display_lock:
@@ -243,23 +309,20 @@ def display_loop():
 
 def main():
     """Main entry point."""
-    logger.info(f"Connecting to Zenoh router at {config.ZENOH_ROUTER}...")
+    logger.info(f"Connecting to Zenoh router at {settings.ZENOH_ROUTER}...")
     
-    z = zenoh.open(
-        zenoh.Config().insert_json5(
-            "connect/endpoints", json.dumps([config.ZENOH_ROUTER])
-        )
-    )
-    
+    conf = zenoh.Config()
+    conf.insert_json5("connect/endpoints", json.dumps([settings.ZENOH_ROUTER]))
+    z = zenoh.open(conf)    
     logger.info("Subscribing to Zenoh topics...")
     
     # Subscribe to all relevant topics
-    frame_sub = z.declare_subscriber("litter/frame", on_frame)
-    mask_binary_sub = z.declare_subscriber("litter/mask_binary", on_mask_binary)
-    mask_probs_sub = z.declare_subscriber("litter/mask_probabilities", on_mask_probabilities)
-    viz_sub = z.declare_subscriber("litter/visualization", on_visualization)
+    frame_sub = z.declare_subscriber(settings.topic_frame, on_frame)
+    mask_binary_sub = z.declare_subscriber(settings.topic_mask_binary, on_mask_binary)
+    mask_probs_sub = z.declare_subscriber(settings.topic_mask_probabilities, on_mask_probabilities)
+    viz_sub = z.declare_subscriber(settings.topic_visualization, on_visualization)
     
-    logger.info("Subscribed to topics: litter/frame, litter/mask_binary, litter/mask_probabilities, litter/visualization")
+    logger.info(f"Subscribed to topics: {settings.topic_frame}, {settings.topic_mask_binary}, {settings.topic_mask_probabilities}, {settings.topic_visualization}")
     
     try:
         display_loop()

@@ -6,10 +6,11 @@ import time
 
 import cv2
 import zenoh
-from dotenv import load_dotenv
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
+from config import Settings
 
-load_dotenv("../.env")
-ZENOH_ROUTER = os.getenv("ZENOH_ROUTER", "localhost:7447")
+settings = Settings()
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -20,9 +21,9 @@ logger = logging.getLogger("webcam")
 
 
 def publish_webcam():
-    logger.info(f"Connecting to Zenoh router at {ZENOH_ROUTER}…")
+    logger.info(f"Connecting to Zenoh router at {settings.ZENOH_ROUTER}…")
     conf = zenoh.Config()
-    conf.insert_json5("connect/endpoints", json.dumps([f"tcp/{ZENOH_ROUTER}"]))
+    conf.insert_json5("connect/endpoints", json.dumps([settings.ZENOH_ROUTER]))
     session = zenoh.open(conf)
     logger.info("Zenoh session open. Publishing webcam frames to litter/frame.")
 
@@ -46,8 +47,8 @@ def publish_webcam():
                 logger.warning("JPEG encoding failed, überspringe Frame.")
                 continue
 
-            session.put("litter/frame", buf.tobytes())
-            logger.debug("Published frame to litter/frame (%d bytes)", len(buf))
+            session.put(settings.topic_frame, buf.tobytes())
+            logger.debug(f"Published frame to {settings.topic_frame} (%d bytes)", len(buf))
             time.sleep(1 / 10)
     finally:
         cap.release()
