@@ -52,6 +52,9 @@ GROUND_ROI_TOP  = 0.4
 
 DEFAULT_THRESHOLD = 0.5
 THRESHOLD_CANDIDATES = [0.3, 0.4, 0.5, 0.6, 0.7]
+
+USE_POSTPROCESSING = True
+MIN_COMPONENT_SIZE = 100
                                # override with value from data/meta.json
 
 # ── Data ──────────────────────────────────────────────────────────────────────
@@ -767,14 +770,61 @@ class CombinedLoss(nn.Module):
 # ── Metrics ───────────────────────────────────────────────────────────────────
 
 @torch.no_grad()
-def compute_iou(logits: torch.Tensor, masks: torch.Tensor,
-                threshold: float = 0.5) -> float:
+def compute_iou(
+    logits: torch.Tensor,
+    masks: torch.Tensor,
+    threshold: float = 0.5,
+    use_postprocessing: bool = False,
+    min_component_size: int = 0,
+) -> float:
     preds = (torch.sigmoid(logits) > threshold).float()
+
+    if use_postprocessing:
+        preds = remove_small_components(preds, min_component_size)
+
     inter = (preds * masks).sum().item()
     union = (preds + masks - preds * masks).sum().item()
     return inter / max(union, 1.0)
 
+def remove_small_components(preds: torch.Tensor, min_size: int) -> torch.Tensor:
+    """
+    Entfernt kleine zusammenhängende Komponenten aus binären Vorhersagemasken.
+    preds: Tensor mit Shape (B, 1, H, W), Werte 0 oder 1
+    """
+    preds_np = preds.cpu().numpy().astype(np.uint8)
+    cleaned = np.zeros_like(preds_np)
 
+    for b in range(preds_np.shape[0]):
+        mask = preds_np[b, 0]  # (H, W)
+
+        visited = np.zeros_like(mask, dtype=bool)
+        h, w = mask.shape
+
+        for y in range(h):
+            for x in range(w):
+                if mask[y, x] == 0 or visited[y, x]:
+                    continue
+
+                # Flood fill / connected component
+                stack = [(y, x)]
+                component = []
+                visited[y, x] = True
+
+                while stack:
+                    cy, cx = stack.pop()
+                    component.append((cy, cx))
+
+                    for ny, nx in [(cy-1, cx), (cy+1, cx), (cy, cx-1), (cy, cx+1)]:
+                        if 0 <= ny < h and 0 <= nx < w:
+                            if mask[ny, nx] == 1 and not visited[ny, nx]:
+                                visited[ny, nx] = True
+                                stack.append((ny, nx))
+
+                if len(component) >= min_size:
+                    for cy, cx in component:
+                        cleaned[b, 0, cy, cx] = 1
+
+    return torch.from_numpy(cleaned).to(preds.device).float()
 # ── Training loop ─────────────────────────────────────────────────────────────
 
 def get_device() -> torch.device:
@@ -841,13 +891,15 @@ def train(run_name: str, time_limit: int):
             "time_limit_s":      time_limit,
             "use_ground_roi":    USE_GROUND_ROI,
             "ground_roi_top":     GROUND_ROI_TOP,
+            "use_postprocessing": USE_POSTPROCESSING,
+            "min_component_size": MIN_COMPONENT_SIZE,
         })
 
         t0 = time.time()
         step = 0
         epoch = 0
         best_val_iou = 0.0
-
+        best_threshold_overall = DEFAULT_THRESHOLD
         while True:
             epoch += 1
             model.train()
@@ -870,7 +922,13 @@ def train(run_name: str, time_limit: int):
                 scheduler.step()
 
                 train_loss += loss.item()
-                train_iou  += compute_iou(logits, masks)
+                train_iou += compute_iou(
+                    logits,
+                    masks,
+                    threshold=DEFAULT_THRESHOLD,
+                    use_postprocessing=USE_POSTPROCESSING,
+                    min_component_size=MIN_COMPONENT_SIZE,
+                )
                 step += 1
                 if step % 10 == 0:
                     elapsed = time.time() - t0
@@ -892,12 +950,23 @@ def train(run_name: str, time_limit: int):
                         val_loss += criterion(logits, masks).item()
 
                         # Standard IoU (z. B. für Anzeige)
-                        val_iou += compute_iou(logits, masks, threshold=DEFAULT_THRESHOLD)
+                        val_iou += compute_iou(
+                            logits,
+                            masks,
+                            threshold=DEFAULT_THRESHOLD,
+                            use_postprocessing=USE_POSTPROCESSING,
+                            min_component_size=MIN_COMPONENT_SIZE,
+                        )
 
                         # Threshold-Tuning
                         for t in THRESHOLD_CANDIDATES:
-                            threshold_scores[t] += compute_iou(logits, masks, threshold=t)
-
+                            threshold_scores[t] += compute_iou(
+                                logits,
+                                masks,
+                                threshold=t,
+                                use_postprocessing=USE_POSTPROCESSING,
+                                min_component_size=MIN_COMPONENT_SIZE,
+                            )
                 n_train = len(train_loader)
                 n_val   = len(val_loader)
                 elapsed = time.time() - t0
@@ -923,8 +992,12 @@ def train(run_name: str, time_limit: int):
 
                 if best_threshold_iou > best_val_iou:
                     best_val_iou = best_threshold_iou
+                    best_threshold_overall = best_threshold
                     torch.save(model.state_dict(), "best_model.pth")
                     mlflow.log_artifact("best_model.pth")
+
+                    with open("best_threshold.json", "w") as f:
+                        json.dump({"threshold": best_threshold_overall}, f)
 
                 print(
                     f"epoch {epoch:3d}  "
@@ -940,6 +1013,7 @@ def train(run_name: str, time_limit: int):
             break  # inner for-loop broke early (time limit)
 
         mlflow.log_metric("best_val_iou", best_val_iou)
+        mlflow.log_param("best_threshold_final", best_threshold_overall)
         print(f"\nBest val_iou: {best_val_iou:.4f}")
         print("Run complete.")
 
