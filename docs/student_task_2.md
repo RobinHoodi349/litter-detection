@@ -158,3 +158,11 @@ Fragen, die Sie sich stellen könnten:
 - Wie wird ein Plan dargestellt?
 
 ### Aufgabe 1:
+```
+Agent --- Tools
+            |--- **Laufen**: Geradeauslaufen von Punkt A nach B.
+            |--- **Drehen**: Wenn B erreicht drehen.
+            |--- **Scan**: Während des laufens die Umgebung nach Müll Scannen.
+                    |------ **Save & Send**: Bei erfolgreicher erkennung, Position speichern & senden.
+                    |------ **Emote**: Bewegung & Sound bei erfolgreicher erkennung durchführen.
+```
