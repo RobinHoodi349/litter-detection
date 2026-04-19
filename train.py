@@ -9,11 +9,11 @@ This file IS modified by the agent. Everything is fair game:
   - Batch size, image crop size
   - Any other technique the agent wants to try
 
-Constraint: training stops after TIME_LIMIT seconds so every experiment is
+Constraint: training stops after a fixed epoch budget so every experiment is
 comparable. The primary metric logged to MLflow is val_iou (higher is better).
 
 Usage:
-    uv run python train.py [--run-name NAME] [--time-limit SECONDS]
+    uv run python train.py [--run-name NAME] [--epochs N]
 """
 
 import argparse
@@ -37,7 +37,7 @@ from tqdm import tqdm
 
 # ── Hyperparameters (edit freely) ─────────────────────────────────────────────
 
-TIME_LIMIT       = 20 * 60   # seconds of training per run
+DEFAULT_EPOCHS  =   5   # EPOCHS of training per run
 BATCH_SIZE       = 2
 CROP_SIZE        = 256        # random-crop spatial resolution during training
 LR               = 8e-4
@@ -50,7 +50,7 @@ POS_WEIGHT       = 5.0        # BCEWithLogitsLoss pos_weight (handles class imba
 USE_GROUND_ROI  = True
 GROUND_ROI_TOP  = 0.4
 
-DEFAULT_THRESHOLD = 0.5
+DEFAULT_THRESHOLD = 0.7
 THRESHOLD_CANDIDATES = [0.3, 0.4, 0.5, 0.6, 0.7]
 
 USE_POSTPROCESSING = True
@@ -835,7 +835,7 @@ def get_device() -> torch.device:
     return torch.device("cpu")
 
 
-def train(run_name: str, time_limit: int):
+def train(run_name: str, epochs: int):
     device = get_device()
     print(f"Device: {device}")
 
@@ -865,7 +865,7 @@ def train(run_name: str, time_limit: int):
         optimizer,
         max_lr=LR,
         steps_per_epoch=len(train_loader),
-        epochs=9999,          # effectively unlimited; time-budget controls stop
+        epochs=epochs,
         pct_start=0.05,
     )
     criterion = CombinedLoss(pos_weight=pos_weight).to(device)
@@ -888,7 +888,7 @@ def train(run_name: str, time_limit: int):
             "loss":              "BCE+Dice",
             "total_params":      total_params,
             "device":            str(device),
-            "time_limit_s":      time_limit,
+            "epochs_target":     epochs,
             "use_ground_roi":    USE_GROUND_ROI,
             "ground_roi_top":     GROUND_ROI_TOP,
             "use_postprocessing": USE_POSTPROCESSING,
@@ -897,25 +897,21 @@ def train(run_name: str, time_limit: int):
 
         t0 = time.time()
         step = 0
-        epoch = 0
         best_val_iou = 0.0
         best_threshold_overall = DEFAULT_THRESHOLD
-        while True:
-            epoch += 1
+
+        for epoch in range(1, epochs + 1):
             model.train()
             train_loss = 0.0
-            train_iou  = 0.0
+            train_iou = 0.0
 
             for images, masks in train_loader:
-                if time.time() - t0 > time_limit:
-                    break
-
                 images = images.to(device, non_blocking=True)
-                masks  = masks.to(device,  non_blocking=True)
+                masks = masks.to(device, non_blocking=True)
 
                 optimizer.zero_grad(set_to_none=True)
                 logits = model(images)
-                loss   = criterion(logits, masks)
+                loss = criterion(logits, masks)
                 loss.backward()
                 nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 optimizer.step()
@@ -934,83 +930,77 @@ def train(run_name: str, time_limit: int):
                     elapsed = time.time() - t0
                     print(f"step={step}  loss={loss.item():.4f}  elapsed={elapsed:.0f}s")
 
-            else: #edu: see https://docs.python.org/3/reference/compound_stmts.html#for
-                # ── Validation ────────────────────────────────────────────
-                model.eval()
-                val_loss = 0.0
-                val_iou  = 0.0
+            # ── Validation ────────────────────────────────────────────
+            model.eval()
+            val_loss = 0.0
+            val_iou = 0.0
 
-                # Für Threshold-Tuning
-                threshold_scores = {t: 0.0 for t in THRESHOLD_CANDIDATES}
-                with torch.no_grad():
-                    for images, masks in val_loader:
-                        images = images.to(device, non_blocking=True)
-                        masks  = masks.to(device,  non_blocking=True)
-                        logits = model(images)
-                        val_loss += criterion(logits, masks).item()
+            threshold_scores = {t: 0.0 for t in THRESHOLD_CANDIDATES}
+            with torch.no_grad():
+                for images, masks in val_loader:
+                    images = images.to(device, non_blocking=True)
+                    masks = masks.to(device, non_blocking=True)
+                    logits = model(images)
+                    val_loss += criterion(logits, masks).item()
 
-                        # Standard IoU (z. B. für Anzeige)
-                        val_iou += compute_iou(
+                    val_iou += compute_iou(
+                        logits,
+                        masks,
+                        threshold=DEFAULT_THRESHOLD,
+                        use_postprocessing=USE_POSTPROCESSING,
+                        min_component_size=MIN_COMPONENT_SIZE,
+                    )
+
+                    for t in THRESHOLD_CANDIDATES:
+                        threshold_scores[t] += compute_iou(
                             logits,
                             masks,
-                            threshold=DEFAULT_THRESHOLD,
+                            threshold=t,
                             use_postprocessing=USE_POSTPROCESSING,
                             min_component_size=MIN_COMPONENT_SIZE,
                         )
 
-                        # Threshold-Tuning
-                        for t in THRESHOLD_CANDIDATES:
-                            threshold_scores[t] += compute_iou(
-                                logits,
-                                masks,
-                                threshold=t,
-                                use_postprocessing=USE_POSTPROCESSING,
-                                min_component_size=MIN_COMPONENT_SIZE,
-                            )
-                n_train = len(train_loader)
-                n_val   = len(val_loader)
-                elapsed = time.time() - t0
-                # Durchschnitt berechnen
-                threshold_scores = {t: v / max(n_val, 1) for t, v in threshold_scores.items()}
+            n_train = len(train_loader)
+            n_val = len(val_loader)
+            elapsed = time.time() - t0
 
-                # besten Threshold finden
-                best_threshold = max(threshold_scores, key=threshold_scores.get)
-                best_threshold_iou = threshold_scores[best_threshold]
+            threshold_scores = {t: v / max(n_val, 1) for t, v in threshold_scores.items()}
+            best_threshold = max(threshold_scores, key=threshold_scores.get)
+            best_threshold_iou = threshold_scores[best_threshold]
 
-                metrics = {
-                    "train_loss": train_loss / max(n_train, 1),
-                    "train_iou":  train_iou  / max(n_train, 1),
-                    "val_loss":   val_loss   / max(n_val,   1),
-                    "val_iou":    val_iou    / max(n_val,   1),
-                    "epoch":      epoch,
-                    "elapsed_s":  elapsed,
-                    "lr":         scheduler.get_last_lr()[0],
-                    "best_threshold": best_threshold,
-                    "best_threshold_iou": best_threshold_iou,
-                }
-                mlflow.log_metrics(metrics, step=step)
+            metrics = {
+                "train_loss": train_loss / max(n_train, 1),
+                "train_iou": train_iou / max(n_train, 1),
+                "val_loss": val_loss / max(n_val, 1),
+                "val_iou": val_iou / max(n_val, 1),
+                "epoch": epoch,
+                "elapsed_s": elapsed,
+                "lr": scheduler.get_last_lr()[0],
+                "best_threshold": best_threshold,
+                "best_threshold_iou": best_threshold_iou,
+            }
+            mlflow.log_metrics(metrics, step=epoch)
 
-                if best_threshold_iou > best_val_iou:
-                    best_val_iou = best_threshold_iou
-                    best_threshold_overall = best_threshold
-                    torch.save(model.state_dict(), "best_model.pth")
-                    mlflow.log_artifact("best_model.pth")
+            if best_threshold_iou > best_val_iou:
+                best_val_iou = best_threshold_iou
+                best_threshold_overall = best_threshold
+                torch.save(model.state_dict(), "best_model.pth")
+                mlflow.log_artifact("best_model.pth")
 
-                    with open("best_threshold.json", "w") as f:
-                        json.dump({"threshold": best_threshold_overall}, f)
+                with open("best_threshold.json", "w") as f:
+                    json.dump({"threshold": best_threshold_overall}, f)
 
-                print(
-                    f"epoch {epoch:3d}  "
-                    f"train_loss={metrics['train_loss']:.4f}  "
-                    f"train_iou={metrics['train_iou']:.4f}  "
-                    f"val_loss={metrics['val_loss']:.4f}  "
-                    f"val_iou={metrics['val_iou']:.4f}  "
-                    f"[{elapsed:.0f}s]"
-                    f"best_threshold={best_threshold:.2f}  "
-                    f"best_threshold_iou={best_threshold_iou:.4f}"
-                )
-                continue  # keep outer while going
-            break  # inner for-loop broke early (time limit)
+            print(
+                f"epoch {epoch:3d}/{epochs:3d}  "
+                f"train_loss={metrics['train_loss']:.4f}  "
+                f"train_iou={metrics['train_iou']:.4f}  "
+                f"val_loss={metrics['val_loss']:.4f}  "
+                f"val_iou={metrics['val_iou']:.4f}  "
+                f"[{elapsed:.0f}s]  "
+                f"best_threshold={best_threshold:.2f}  "
+                f"best_threshold_iou={best_threshold_iou:.4f}"
+            )
+
 
         mlflow.log_metric("best_val_iou", best_val_iou)
         mlflow.log_param("best_threshold_final", best_threshold_overall)
@@ -1020,9 +1010,9 @@ def train(run_name: str, time_limit: int):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--run-name",   default="baseline",
+    parser.add_argument("--run-name", default="baseline",
                         help="MLflow run name")
-    parser.add_argument("--time-limit", type=int, default=TIME_LIMIT,
-                        help="Training time budget in seconds")
+    parser.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS,
+                        help="Number of training epochs")
     args = parser.parse_args()
-    train(run_name=args.run_name, time_limit=args.time_limit)
+    train(run_name=args.run_name, epochs=args.epochs)
