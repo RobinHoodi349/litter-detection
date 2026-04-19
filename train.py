@@ -55,6 +55,11 @@ THRESHOLD_CANDIDATES = [0.3, 0.4, 0.5, 0.6, 0.7]
 
 USE_POSTPROCESSING = True
 MIN_COMPONENT_SIZE = 100
+
+USE_ERROR_ANALYSIS = True
+ERROR_ANALYSIS_DIR = "error_analysis"
+MAX_ERROR_SAMPLES_PER_EPOCH = 5
+FALSE_POSITIVE_THRESHOLD = 0.01
                                # override with value from data/meta.json
 
 # ── Data ──────────────────────────────────────────────────────────────────────
@@ -825,6 +830,54 @@ def remove_small_components(preds: torch.Tensor, min_size: int) -> torch.Tensor:
                         cleaned[b, 0, cy, cx] = 1
 
     return torch.from_numpy(cleaned).to(preds.device).float()
+
+
+def save_error_sample(
+    image_tensor: torch.Tensor,
+    mask_tensor: torch.Tensor,
+    pred_tensor: torch.Tensor,
+    save_dir: Path,
+    epoch: int,
+    sample_idx: int,
+    pred_area: float,
+    gt_area: float,
+    iou: float,
+) -> None:
+    """
+    Speichert ein Fehlerbeispiel für die spätere Analyse.
+    Erwartet einzelne Tensors mit Shapes:
+      image_tensor: (3, H, W)
+      mask_tensor:  (1, H, W)
+      pred_tensor:  (1, H, W)
+    """
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    # Bild wieder in [0,255] zurückwandeln
+    image = image_tensor.detach().cpu().numpy().transpose(1, 2, 0)
+    mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+    std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+    image = (image * std + mean).clip(0, 1)
+    image = (image * 255).astype(np.uint8)
+
+    mask = (mask_tensor.detach().cpu().numpy()[0] * 255).astype(np.uint8)
+    pred = (pred_tensor.detach().cpu().numpy()[0] * 255).astype(np.uint8)
+
+    stem = f"epoch{epoch:03d}_sample{sample_idx:03d}"
+
+    Image.fromarray(image).save(save_dir / f"{stem}_image.png")
+    Image.fromarray(mask).save(save_dir / f"{stem}_mask.png")
+    Image.fromarray(pred).save(save_dir / f"{stem}_pred.png")
+
+    info = {
+        "epoch": epoch,
+        "sample_idx": sample_idx,
+        "pred_area": float(pred_area),
+        "gt_area": float(gt_area),
+        "iou": float(iou),
+    }
+    (save_dir / f"{stem}_info.json").write_text(json.dumps(info, indent=2))
+
+
 # ── Training loop ─────────────────────────────────────────────────────────────
 
 def get_device() -> torch.device:
@@ -893,8 +946,15 @@ def train(run_name: str, epochs: int):
             "ground_roi_top":     GROUND_ROI_TOP,
             "use_postprocessing": USE_POSTPROCESSING,
             "min_component_size": MIN_COMPONENT_SIZE,
+            "use_error_analysis": USE_ERROR_ANALYSIS,
+            "max_error_samples_per_epoch": MAX_ERROR_SAMPLES_PER_EPOCH,
+            "false_positive_threshold": FALSE_POSITIVE_THRESHOLD,
         })
+        error_analysis_dir = Path(ERROR_ANALYSIS_DIR)
+        if USE_ERROR_ANALYSIS:
+            error_analysis_dir.mkdir(parents=True, exist_ok=True)
 
+        
         t0 = time.time()
         step = 0
         best_val_iou = 0.0
@@ -935,14 +995,44 @@ def train(run_name: str, epochs: int):
             val_loss = 0.0
             val_iou = 0.0
 
+            error_candidates = []
             threshold_scores = {t: 0.0 for t in THRESHOLD_CANDIDATES}
+
             with torch.no_grad():
                 for images, masks in val_loader:
                     images = images.to(device, non_blocking=True)
                     masks = masks.to(device, non_blocking=True)
                     logits = model(images)
-                    val_loss += criterion(logits, masks).item()
 
+                    if USE_ERROR_ANALYSIS:
+                        probs = torch.sigmoid(logits)
+                        preds = (probs > DEFAULT_THRESHOLD).float()
+
+                        if USE_POSTPROCESSING:
+                            preds = remove_small_components(preds, MIN_COMPONENT_SIZE)
+
+                        for b in range(images.size(0)):
+                            pred_area = preds[b].sum().item()
+                            gt_area = masks[b].sum().item()
+
+                            if gt_area < 1.0 and pred_area > FALSE_POSITIVE_THRESHOLD * preds[b].numel():
+                                iou = compute_iou(
+                                    logits[b:b+1],
+                                    masks[b:b+1],
+                                    threshold=DEFAULT_THRESHOLD,
+                                    use_postprocessing=USE_POSTPROCESSING,
+                                    min_component_size=MIN_COMPONENT_SIZE,
+                                )
+
+                                error_candidates.append((
+                                    iou,
+                                    images[b],
+                                    masks[b],
+                                    preds[b],
+                                    pred_area,
+                                    gt_area,
+                                ))
+                    val_loss += criterion(logits, masks).item()
                     val_iou += compute_iou(
                         logits,
                         masks,
@@ -1000,7 +1090,25 @@ def train(run_name: str, epochs: int):
                 f"best_threshold={best_threshold:.2f}  "
                 f"best_threshold_iou={best_threshold_iou:.4f}"
             )
+            if USE_ERROR_ANALYSIS and len(error_candidates) > 0:
+                error_candidates.sort(key=lambda x: x[0])  # kleinste IoU zuerst
 
+                epoch_error_dir = error_analysis_dir / f"epoch_{epoch:03d}"
+
+                for sample_idx, (iou, image_t, mask_t, pred_t, pred_area, gt_area) in enumerate(
+                    error_candidates[:MAX_ERROR_SAMPLES_PER_EPOCH]
+                ):
+                    save_error_sample(
+                        image_tensor=image_t,
+                        mask_tensor=mask_t,
+                        pred_tensor=pred_t,
+                        save_dir=epoch_error_dir,
+                        epoch=epoch,
+                        sample_idx=sample_idx,
+                        pred_area=pred_area,
+                        gt_area=gt_area,
+                        iou=iou,
+                    )
 
         mlflow.log_metric("best_val_iou", best_val_iou)
         mlflow.log_param("best_threshold_final", best_threshold_overall)
