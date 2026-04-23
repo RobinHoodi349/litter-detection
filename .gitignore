@@ -5,8 +5,8 @@ data/
 mlruns/
 findings.md
 .DS_Store
+uv.lock
 # generic training checkpoint (named checkpoints are tracked)
 best_model.pth
 .env
 mlflow.db
-uv.lock
