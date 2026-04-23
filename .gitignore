@@ -9,3 +9,4 @@ findings.md
 best_model.pth
 .env
 mlflow.db
+uv.lock
