@@ -19,8 +19,10 @@ Usage:
 import argparse
 import json
 import os
+import sqlite3
 import time
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 import mlflow
 import numpy as np
@@ -67,6 +69,9 @@ FALSE_POSITIVE_THRESHOLD = 0.01
 DATA_DIR   = Path("data")
 IMAGES_DIR = DATA_DIR / "images"
 MASKS_DIR  = DATA_DIR / "masks"
+MLFLOW_DB = Path("mlflow.db")
+MLFLOW_ARTIFACTS_DIR = Path("mlruns")
+MLFLOW_EXPERIMENT = "litter-segmentation"
 
 
 def load_meta() -> dict:
@@ -909,6 +914,7 @@ def train(run_name: str, epochs: int):
     model = EfficientNetB1UNet(dropout=DROPOUT).to(device)
 
     total_params = sum(p.numel() for p in model.parameters())
+    print(f"Model: {model_name}")
     print(f"Model parameters: {total_params:,}")
 
     # ── Optimizer + Schedule ──────────────────────────────────────────────
@@ -924,7 +930,15 @@ def train(run_name: str, epochs: int):
     criterion = CombinedLoss(pos_weight=pos_weight).to(device)
 
     # ── MLflow ────────────────────────────────────────────────────────────
-    mlflow.set_experiment("litter-segmentation")
+    configure_local_mlflow()
+    if mlflow.get_experiment_by_name(MLFLOW_EXPERIMENT) is None:
+        # Eigene Artifact-Location setzen, damit neue Runs nicht von impliziten
+        # oder rechnerabhaengigen Default-Pfaden abhaengen.
+        mlflow.create_experiment(
+            MLFLOW_EXPERIMENT,
+            artifact_location=MLFLOW_ARTIFACTS_DIR.resolve().as_uri(),
+        )
+    mlflow.set_experiment(MLFLOW_EXPERIMENT)
     with mlflow.start_run(run_name=run_name):
         mlflow.log_params({
             "model_name": "EfficientNetB1UNet",
