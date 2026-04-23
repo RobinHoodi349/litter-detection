@@ -26,7 +26,6 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-grpc>=1.24",
     "opentelemetry-semantic-conventions>=0.45",
     "python-dotenv>=1.2.2",
-    "torch>=2.11.0",
 ]
 [[tool.uv.index]]
 name = "pytorch"

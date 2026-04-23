@@ -10,3 +10,5 @@ uv.lock
 best_model.pth
 .env
 mlflow.db
+
+error_analysis/

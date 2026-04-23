@@ -70,7 +70,7 @@ def load_model():
     # Resolve checkpoint path relative to the project root
     script_dir = Path(__file__).resolve().parent
     project_root = script_dir.parent.parent
-    CHECKPOINT = project_root / settings.MODEL_NAME
+    CHECKPOINT = project_root / "models" / settings.MODEL_NAME
     
     if CHECKPOINT.exists():
         model = settings.MODEL_CLASS(dropout=settings.DROPOUT).to(device)

@@ -29,6 +29,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.cuda.amp import autocast, GradScaler
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
@@ -39,21 +40,20 @@ from tqdm import tqdm
 
 # ── Hyperparameters (edit freely) ─────────────────────────────────────────────
 
-DEFAULT_EPOCHS  =   5   # EPOCHS of training per run
-BATCH_SIZE       = 2
+DEFAULT_EPOCHS  =  50   # EPOCHS of training per run
+BATCH_SIZE       = 8
 CROP_SIZE        = 256        # random-crop spatial resolution during training
 LR               = 8e-4
-WEIGHT_DECAY     = 1e-4
 ENCODER_CHANNELS = [64, 128, 256, 512]   # U-Net encoder stage widths
 DECODER_CHANNELS = [256, 128, 64, 32]    # U-Net decoder stage widths
-DROPOUT          = 0.1
+DROPOUT          = 0.25
 POS_WEIGHT       = 5.0        # BCEWithLogitsLoss pos_weight (handles class imbalance)
-
-USE_GROUND_ROI  = True
+WEIGHT_DECAY     = 1e-3        # L2 regularization strength
+USE_GROUND_ROI  = False
 GROUND_ROI_TOP  = 0.4
 
 DEFAULT_THRESHOLD = 0.7
-THRESHOLD_CANDIDATES = [0.3, 0.4, 0.5, 0.6, 0.7]
+THRESHOLD_CANDIDATES = [ 0.5, 0.6, 0.7, 0.8, 0.9] 
 
 USE_POSTPROCESSING = True
 MIN_COMPONENT_SIZE = 100
@@ -102,27 +102,40 @@ class LitterDataset(Dataset):
         self.augment = augment
 
         if augment:
-            self.transform = A.Compose([
-                A.RandomResizedCrop(size=(crop_size, crop_size),
-                                    scale=(0.4, 1.0), ratio=(0.75, 1.33)),
+            # Spatial transforms: auf image UND mask anwenden
+            self.spatial_transforms = A.Compose([
+                A.SmallestMaxSize(max_size=crop_size),
+                A.PadIfNeeded(min_height=crop_size, min_width=crop_size,
+                              border_mode=0, value=0, mask_value=0),
+                A.RandomCrop(height=crop_size, width=crop_size),
                 A.HorizontalFlip(p=0.5),
                 A.RandomRotate90(p=0.3),
-                A.ColorJitter(brightness=0.3, contrast=0.3,
-                              saturation=0.3, hue=0.05, p=0.7),
-                A.GaussNoise(p=0.2),
-                A.GridDistortion(p=0.3),
-                A.ElasticTransform(p=0.3),
+            ], additional_targets={'mask': 'mask'})
+            
+            # Image-only transforms: nur auf image
+            self.image_transforms = A.Compose([
+                A.ColorJitter(brightness=0.2, contrast=0.2,
+                              saturation=0.2, hue=0.05, p=0.5),
+                A.GaussNoise(p=0.1),
                 A.Normalize(mean=(0.485, 0.456, 0.406),
                             std=(0.229, 0.224, 0.225)),
                 ToTensorV2(),
             ])
+            self.augment = True
         else:
-            self.transform = A.Compose([
-                A.Resize(height=crop_size, width=crop_size),
+            self.spatial_transforms = A.Compose([
+                A.SmallestMaxSize(max_size=crop_size),
+                A.PadIfNeeded(min_height=crop_size, min_width=crop_size,
+                              border_mode=0, value=0, mask_value=0),
+                A.CenterCrop(height=crop_size, width=crop_size),
+            ], additional_targets={'mask': 'mask'})
+            
+            self.image_transforms = A.Compose([
                 A.Normalize(mean=(0.485, 0.456, 0.406),
                             std=(0.229, 0.224, 0.225)),
                 ToTensorV2(),
             ])
+            self.augment = False
 
     def __len__(self):
         return len(self.stems)
@@ -134,9 +147,20 @@ class LitterDataset(Dataset):
 
         if USE_GROUND_ROI:
             image, mask = crop_ground_roi(image, mask, GROUND_ROI_TOP)
-                                              
-        out = self.transform(image=image, mask=mask)
-        return out["image"], out["mask"].unsqueeze(0)   # (3,H,W), (1,H,W)
+        
+        # Spatial augmentations auf BEIDE anwenden
+        out = self.spatial_transforms(image=image, mask=mask)
+        image = out["image"]
+        mask = out["mask"]
+        
+        # Image-only transformations
+        out = self.image_transforms(image=image)
+        image = out["image"]
+        
+        # Mask zu Tensor (nur Normalisierung, keine ColorJitter/GaussNoise)
+        mask = torch.from_numpy(mask).unsqueeze(0)  # (1, H, W)
+        
+        return image, mask
 
 
 # ── Model ─────────────────────────────────────────────────────────────────────
@@ -774,7 +798,7 @@ class CombinedLoss(nn.Module):
             targets_smooth = targets * (1.0 - self.label_smoothing) + 0.5 * self.label_smoothing
         else:
             targets_smooth = targets
-        return self.bce(logits, targets_smooth) + self.dice_loss(logits, targets)
+        return self.bce(logits, targets_smooth) + self.dice_loss(logits, targets_smooth)
 
 
 # ── Metrics ───────────────────────────────────────────────────────────────────
@@ -795,6 +819,23 @@ def compute_iou(
     inter = (preds * masks).sum().item()
     union = (preds + masks - preds * masks).sum().item()
     return inter / max(union, 1.0)
+
+
+def _iou_from_probs(
+    probs: torch.Tensor,
+    masks: torch.Tensor,
+    threshold: float,
+    use_postprocessing: bool = False,
+    min_component_size: int = 0,
+) -> float:
+    """Like compute_iou but accepts pre-computed sigmoid probs to avoid redundant sigmoid calls."""
+    preds = (probs > threshold).float()
+    if use_postprocessing:
+        preds = remove_small_components(preds, min_component_size)
+    inter = (preds * masks).sum().item()
+    union = (preds + masks - preds * masks).sum().item()
+    return inter / max(union, 1.0)
+
 
 def remove_small_components(preds: torch.Tensor, min_size: int) -> torch.Tensor:
     """
@@ -914,8 +955,6 @@ def train(run_name: str, epochs: int):
     model = EfficientNetB1UNet(dropout=DROPOUT).to(device)
 
     total_params = sum(p.numel() for p in model.parameters())
-    print(f"Model: {model_name}")
-    print(f"Model parameters: {total_params:,}")
 
     # ── Optimizer + Schedule ──────────────────────────────────────────────
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR,
@@ -925,12 +964,19 @@ def train(run_name: str, epochs: int):
         max_lr=LR,
         steps_per_epoch=len(train_loader),
         epochs=epochs,
-        pct_start=0.05,
+        pct_start=0.15,
+        anneal_strategy='cos',
     )
     criterion = CombinedLoss(pos_weight=pos_weight).to(device)
 
+    # ── Mixed Precision Training ──────────────────────────────────────────
+    scaler = GradScaler()
+
     # ── MLflow ────────────────────────────────────────────────────────────
-    configure_local_mlflow()
+    # Tracking URI: über env-Variable konfigurierbar, default ist Docker-Server
+    mlflow_uri = os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000")
+    mlflow.set_tracking_uri(mlflow_uri)
+    
     if mlflow.get_experiment_by_name(MLFLOW_EXPERIMENT) is None:
         # Eigene Artifact-Location setzen, damit neue Runs nicht von impliziten
         # oder rechnerabhaengigen Default-Pfaden abhaengen.
@@ -984,11 +1030,15 @@ def train(run_name: str, epochs: int):
                 masks = masks.to(device, non_blocking=True)
 
                 optimizer.zero_grad(set_to_none=True)
-                logits = model(images)
-                loss = criterion(logits, masks)
-                loss.backward()
+                
+                with autocast():
+                    logits = model(images)
+                    loss = criterion(logits, masks)
+                
+                scaler.scale(loss).backward()
                 nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                optimizer.step()
+                scaler.step(optimizer)
+                scaler.update()
                 scheduler.step()
 
                 train_loss += loss.item()
@@ -1017,9 +1067,9 @@ def train(run_name: str, epochs: int):
                     images = images.to(device, non_blocking=True)
                     masks = masks.to(device, non_blocking=True)
                     logits = model(images)
+                    probs = torch.sigmoid(logits)
 
                     if USE_ERROR_ANALYSIS:
-                        probs = torch.sigmoid(logits)
                         preds = (probs > DEFAULT_THRESHOLD).float()
 
                         if USE_POSTPROCESSING:
@@ -1030,12 +1080,12 @@ def train(run_name: str, epochs: int):
                             gt_area = masks[b].sum().item()
 
                             if gt_area < 1.0 and pred_area > FALSE_POSITIVE_THRESHOLD * preds[b].numel():
-                                iou = compute_iou(
-                                    logits[b:b+1],
+                                iou = _iou_from_probs(
+                                    probs[b:b+1],
                                     masks[b:b+1],
-                                    threshold=DEFAULT_THRESHOLD,
-                                    use_postprocessing=USE_POSTPROCESSING,
-                                    min_component_size=MIN_COMPONENT_SIZE,
+                                    DEFAULT_THRESHOLD,
+                                    USE_POSTPROCESSING,
+                                    MIN_COMPONENT_SIZE,
                                 )
 
                                 error_candidates.append((
@@ -1047,21 +1097,15 @@ def train(run_name: str, epochs: int):
                                     gt_area,
                                 ))
                     val_loss += criterion(logits, masks).item()
-                    val_iou += compute_iou(
-                        logits,
-                        masks,
-                        threshold=DEFAULT_THRESHOLD,
-                        use_postprocessing=USE_POSTPROCESSING,
-                        min_component_size=MIN_COMPONENT_SIZE,
+                    val_iou += _iou_from_probs(
+                        probs, masks, DEFAULT_THRESHOLD,
+                        USE_POSTPROCESSING, MIN_COMPONENT_SIZE,
                     )
 
                     for t in THRESHOLD_CANDIDATES:
-                        threshold_scores[t] += compute_iou(
-                            logits,
-                            masks,
-                            threshold=t,
-                            use_postprocessing=USE_POSTPROCESSING,
-                            min_component_size=MIN_COMPONENT_SIZE,
+                        threshold_scores[t] += _iou_from_probs(
+                            probs, masks, t,
+                            USE_POSTPROCESSING, MIN_COMPONENT_SIZE,
                         )
 
             n_train = len(train_loader)
@@ -1083,7 +1127,7 @@ def train(run_name: str, epochs: int):
                 "best_threshold": best_threshold,
                 "best_threshold_iou": best_threshold_iou,
             }
-            mlflow.log_metrics(metrics, step=epoch)
+            mlflow.log_metrics(metrics, step=step)
 
             if best_threshold_iou > best_val_iou:
                 best_val_iou = best_threshold_iou
