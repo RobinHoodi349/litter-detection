@@ -41,10 +41,18 @@ meter = metrics.get_meter(settings.SERVICE_NAME)
 
 # Metrics
 
-inference_latency = meter.create_histogram("inference_duration_seconds", description="inference latency", unit="s")
-confidence_hist = meter.create_histogram("detection_confidence", description="YOLO confidence scores", unit="1")
+inference_latency = meter.create_histogram("inference_duration_seconds", description="Model inference latency", unit="s")
+preprocessing_duration = meter.create_histogram("preprocessing_duration_seconds", description="Frame preprocessing time", unit="s")
+visualization_duration = meter.create_histogram("visualization_duration_seconds", description="Mask visualization time", unit="s")
+mask_resizing_duration = meter.create_histogram("mask_resizing_duration_seconds", description="Mask resizing time", unit="s")
+pipeline_duration = meter.create_histogram("pipeline_duration_seconds", description="Total end-to-end pipeline duration", unit="s")
+zenoh_publish_duration = meter.create_histogram("zenoh_publish_duration_seconds", description="Zenoh publication time", unit="s")
+frame_queue_depth = meter.create_observable_gauge("frame_queue_depth", description="Number of frames in processing queue", unit="1", callbacks=[lambda options: [options.Observation(len(frame_queue))]])
+confidence_hist = meter.create_histogram("detection_confidence", description="Detection confidence scores", unit="1")
 frames_processed = meter.create_counter("frames_processed_total", description="Total frames processed")
 frames_skipped = meter.create_counter("frames_skipped_total", description="Frames skipped due to age")
+frames_received = meter.create_counter("frames_received_total", description="Total frames received from Zenoh")
+mask_output_size = meter.create_histogram("mask_output_size_bytes", description="Size of generated mask output", unit="By")
 model = None
 device = None
 
@@ -88,6 +96,7 @@ def on_frame_received(sample: zenoh.Sample):
         frame_height, frame_width = frame_bgr.shape[:2]
         
         with tracer.start_as_current_span("receive_frame"):
+            frames_received.add(1)
             with frame_queue_lock:
                 frame_queue.append((frame_bytes, frame_timestamp, frame_height, frame_width))
                 frame_available.set()
@@ -95,6 +104,8 @@ def on_frame_received(sample: zenoh.Sample):
         logging.exception(f"Failed to enqueue frame from Zenoh: {e}")
 
 def preprocess_frame(frame_bytes):
+    preprocess_start = time.perf_counter()
+    
     img_rgb = cv2.cvtColor(cv2.imdecode(np.frombuffer(frame_bytes, np.uint8), cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
     
     # Reduce resolution for faster processing
@@ -104,6 +115,10 @@ def preprocess_frame(frame_bytes):
         img_rgb = cv2.resize(img_rgb, new_size, interpolation=cv2.INTER_LINEAR)
     
     img_tensor = torch.from_numpy(img_rgb).permute(2, 0, 1).unsqueeze(0).float() / 255.0
+    
+    preprocess_duration = time.perf_counter() - preprocess_start
+    preprocessing_duration.record(preprocess_duration)
+    
     return img_tensor.to(device)
 
 def inference(frame_bytes: bytes):
@@ -111,7 +126,7 @@ def inference(frame_bytes: bytes):
         mask_probabilities = None
         mask_binary = None
         
-        with tracer.start_as_current_span("inference")as span:
+        with tracer.start_as_current_span("inference") as span:
             span.set_attribute("frame_size_bytes", len(frame_bytes))
             span.set_attribute("model_name", settings.MODEL_NAME)
             start_time = time.perf_counter()
@@ -134,19 +149,22 @@ def inference(frame_bytes: bytes):
                     mask_probabilities = None
                     mask_binary = None
                 
-                span.set_attribute("inference_duration_seconds", round(duration*1000,1))
-                inference_latency.record(duration,{"model_name": settings.MODEL_NAME})
+                span.set_attribute("inference_duration_seconds", round(duration*1000, 1))
+                span.set_attribute("mask_shape", str(mask_probabilities.shape if mask_probabilities is not None else "None"))
+                inference_latency.record(duration, {"model_name": settings.MODEL_NAME})
                 frames_processed.add(1)
                 
                 logging.info(f"Maske erhalten: Shape {mask_probabilities.shape}, Binary Mask Shape {mask_binary.shape}")
 
             except Exception as e:
                 logging.exception(f"Error during inference: {e}")
+                span.record_exception(e)
             
             return mask_probabilities, mask_binary
             
 
 def visualize_mask(frame_bytes: bytes, mask_binary: np.ndarray, original_frame_height: int, original_frame_width: int, alpha: float = 0.5):
+    viz_start = time.perf_counter()
     try:
         # Dekodiere Frame zu OpenCV-Format (BGR)
         frame_bgr = cv2.imdecode(np.frombuffer(frame_bytes, np.uint8), cv2.IMREAD_COLOR)
@@ -156,7 +174,9 @@ def visualize_mask(frame_bytes: bytes, mask_binary: np.ndarray, original_frame_h
         mask_height, mask_width = mask_binary.shape[:2]
         
         if (mask_height, mask_width) != (original_frame_height, original_frame_width):
+            resize_start = time.perf_counter()
             mask_binary = cv2.resize(mask_binary, (original_frame_width, original_frame_height), interpolation=cv2.INTER_NEAREST)
+            mask_resizing_duration.record(time.perf_counter() - resize_start)
         
         # Erstelle rotes Overlay für erkannte Litter-Bereiche
         overlay = frame_rgb.copy()
@@ -167,6 +187,7 @@ def visualize_mask(frame_bytes: bytes, mask_binary: np.ndarray, original_frame_h
         visualized = cv2.addWeighted(frame_rgb, 1 - alpha, overlay, alpha, 0)
         
         logging.debug(f"Visualisierung erstellt: {visualized.shape}")
+        visualization_duration.record(time.perf_counter() - viz_start)
         return visualized
         
     except Exception as e:
@@ -243,7 +264,9 @@ def main():
                     logging.info(f"Probability mask shape: {mask_probabilities.shape}, target: ({frame_height}, {frame_width})")
                     if (mask_h, mask_w) != (frame_height, frame_width):
                         # Use cv2.resize with correct order: (width, height) for resize, but numpy shape is (height, width)
+                        resize_start = time.perf_counter()
                         resized_mask_probs = cv2.resize(mask_probabilities, (frame_width, frame_height), interpolation=cv2.INTER_LINEAR)
+                        mask_resizing_duration.record(time.perf_counter() - resize_start)
                         logging.info(f"Resized probability mask to: {resized_mask_probs.shape}")
                     else:
                         resized_mask_probs = mask_probabilities
@@ -253,7 +276,9 @@ def main():
                     logging.info(f"Binary mask shape: {mask_binary.shape}, target: ({frame_height}, {frame_width})")
                     if (mask_h, mask_w) != (frame_height, frame_width):
                         # Use cv2.resize with correct order: (width, height) for resize, but numpy shape is (height, width)
+                        resize_start = time.perf_counter()
                         resized_mask_binary = cv2.resize(mask_binary, (frame_width, frame_height), interpolation=cv2.INTER_NEAREST)
+                        mask_resizing_duration.record(time.perf_counter() - resize_start)
                         logging.info(f"Resized binary mask to: {resized_mask_binary.shape}")
                     else:
                         resized_mask_binary = mask_binary
@@ -262,12 +287,15 @@ def main():
                 visualized_img = visualize_mask(frame_bytes, resized_mask_binary, frame_height, frame_width, alpha=0.5) if resized_mask_binary is not None else None
                 
                 # Sende Ergebnisse über Zenoh (use resized versions!)
+                publish_start = time.perf_counter()
                 if resized_mask_probs is not None:
                     z.put(settings.topic_mask_probabilities, resized_mask_probs.tobytes())
+                    mask_output_size.record(resized_mask_probs.nbytes, {"output_type": "mask_probabilities"})
                     logging.info(f"Sent probability mask (bytes: {resized_mask_probs.nbytes}, shape: {resized_mask_probs.shape})")
                 
                 if resized_mask_binary is not None:
                     z.put(settings.topic_mask_binary, resized_mask_binary.tobytes())
+                    mask_output_size.record(resized_mask_binary.nbytes, {"output_type": "mask_binary"})
                     logging.info(f"Sent binary mask (bytes: {resized_mask_binary.nbytes}, shape: {resized_mask_binary.shape})")
                 
                 if visualized_img is not None:
@@ -275,10 +303,18 @@ def main():
                     visualized_bgr = cv2.cvtColor(visualized_img, cv2.COLOR_RGB2BGR)
                     success, buf = cv2.imencode(".jpg", visualized_bgr, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
                     z.put(settings.topic_visualization, buf.tobytes(), encoding=zenoh.Encoding.IMAGE_JPEG)
+                    mask_output_size.record(buf.nbytes, {"output_type": "visualization"})
                     logging.debug(f"Sent visualization: {visualized_bgr.shape}")
                 
+                publish_duration = time.perf_counter() - publish_start
+                zenoh_publish_duration.record(publish_duration)
+                
                 overall_duration = time.perf_counter() - overall_start
-                root_span.set_attribute("overall_processing_duration_seconds", round(overall_duration*1000,1))
+                pipeline_duration.record(overall_duration)
+                root_span.set_attribute("overall_processing_duration_seconds", round(overall_duration*1000, 1))
+                root_span.set_attribute("zenoh_publish_duration_seconds", round(publish_duration*1000, 1))
+                root_span.set_attribute("frame_height", frame_height)
+                root_span.set_attribute("frame_width", frame_width)
                 
                 # Warn if processing takes too long
                 if overall_duration > PROCESSING_TIMEOUT_SECONDS:
