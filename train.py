@@ -9,11 +9,11 @@ This file IS modified by the agent. Everything is fair game:
   - Batch size, image crop size
   - Any other technique the agent wants to try
 
-Constraint: training stops after EPOCHEN epochs so every experiment is
+Constraint: training stops after a fixed epoch budget so every experiment is
 comparable. The primary metric logged to MLflow is val_iou (higher is better).
 
 Usage:
-    uv run python train.py [--run-name NAME] [--epochen N] [--model NAME|all]
+    uv run python train.py [--run-name NAME] [--epochs N]
 """
 
 import argparse
@@ -39,21 +39,29 @@ from tqdm import tqdm
 
 # ── Hyperparameters (edit freely) ─────────────────────────────────────────────
 
-# Epochen als Messwert statt Zeitlimit, damit jedes Training vergleichbar ist
-# und die MLflow-Kurven direkt pro Epoche gelesen werden koennen.
-EPOCHEN          = 5           # Maximale Anzahl an Epochen
-
-# Legacy-Konstante absichtlich stehen gelassen, damit bestehende Notizen nicht
-# brechen. Das Training selbst wird unten nicht mehr zeitbasiert beendet.
-TIME_LIMIT       = 20 * 60
-BATCH_SIZE       = 8
-CROP_SIZE        = 384        # random-crop spatial resolution during training
+DEFAULT_EPOCHS  =   5   # EPOCHS of training per run
+BATCH_SIZE       = 2
+CROP_SIZE        = 256        # random-crop spatial resolution during training
 LR               = 8e-4
 WEIGHT_DECAY     = 1e-4
 ENCODER_CHANNELS = [64, 128, 256, 512]   # U-Net encoder stage widths
 DECODER_CHANNELS = [256, 128, 64, 32]    # U-Net decoder stage widths
 DROPOUT          = 0.1
 POS_WEIGHT       = 5.0        # BCEWithLogitsLoss pos_weight (handles class imbalance)
+
+USE_GROUND_ROI  = True
+GROUND_ROI_TOP  = 0.4
+
+DEFAULT_THRESHOLD = 0.7
+THRESHOLD_CANDIDATES = [0.3, 0.4, 0.5, 0.6, 0.7]
+
+USE_POSTPROCESSING = True
+MIN_COMPONENT_SIZE = 100
+
+USE_ERROR_ANALYSIS = True
+ERROR_ANALYSIS_DIR = "error_analysis"
+MAX_ERROR_SAMPLES_PER_EPOCH = 5
+FALSE_POSITIVE_THRESHOLD = 0.01
                                # override with value from data/meta.json
 
 # ── Data ──────────────────────────────────────────────────────────────────────
@@ -71,6 +79,20 @@ def load_meta() -> dict:
     if p.exists():
         return json.loads(p.read_text())
     return {}
+
+def crop_ground_roi(image: np.ndarray, mask: np.ndarray, roi_top: float):
+    h = image.shape[0]
+    y0 = int(h * roi_top)
+
+    cropped_image = image[y0:, :]
+    cropped_mask  = mask[y0:, :]
+     # Safety: falls durch den Crop kein Müll mehr im Bild ist → kein Crop
+    if cropped_mask.sum() ==0:
+        return image, mask
+    
+    return cropped_image, cropped_mask
+
+
 
 
 class LitterDataset(Dataset):
@@ -110,6 +132,9 @@ class LitterDataset(Dataset):
         image = np.array(Image.open(IMAGES_DIR / f"{stem}.jpg").convert("RGB"))
         mask  = (np.array(Image.open(MASKS_DIR / f"{stem}.png")) > 127).astype(np.float32)
 
+        if USE_GROUND_ROI:
+            image, mask = crop_ground_roi(image, mask, GROUND_ROI_TOP)
+                                              
         out = self.transform(image=image, mask=mask)
         return out["image"], out["mask"].unsqueeze(0)   # (3,H,W), (1,H,W)
 
@@ -646,7 +671,85 @@ class EfficientNetB4UNet(nn.Module):
         d = self.final_up(d)
         d = self.final_conv(d)
         return self.head(d)                         # 1 ch,   H/1
+    
+class EfficientNetB1UNet(nn.Module):
+    def __init__(self, dropout: float = DROPOUT):
+        super().__init__()
 
+        backbone = tv_models.efficientnet_b1(
+            weights=tv_models.EfficientNet_B1_Weights.IMAGENET1K_V1
+        )
+        features = backbone.features
+
+        # Encoder Stages (ähnlich wie B3, aber andere Channels)
+        self.stage0 = features[0]    # ~32 ch, H/2
+        self.stage1 = features[1]    # ~16 ch
+        self.stage2 = features[2]    # ~24 ch
+        self.stage3 = features[3]    # ~40 ch
+        self.stage4 = features[4]    # ~80 ch
+        self.stage5 = features[5]    # ~112 ch
+        self.stage6 = features[6]    # ~192 ch
+        self.stage7 = features[7]    # ~320 ch (bottleneck)
+
+        # Freeze BN
+        for m in self.modules():
+            if isinstance(m, nn.BatchNorm2d):
+                m.weight.requires_grad_(False)
+                m.bias.requires_grad_(False)
+
+        # Decoder
+        self.up1 = nn.ConvTranspose2d(320, 112, 2, 2)
+        self.dec1 = ConvBlock(112 + 112, 256, dropout)
+
+        self.up2 = nn.ConvTranspose2d(256, 128, 2, 2)
+        self.dec2 = ConvBlock(128 + 40, 128, dropout)
+
+        self.up3 = nn.ConvTranspose2d(128, 64, 2, 2)
+        self.dec3 = ConvBlock(64 + 24, 64, dropout)
+
+        self.up4 = nn.ConvTranspose2d(64, 32, 2, 2)
+        self.dec4 = ConvBlock(32 + 16, 32, dropout)
+
+        self.final_up = nn.ConvTranspose2d(32, 16, 2, 2)
+        self.final_conv = ConvBlock(16, 16, dropout)
+
+        self.head = nn.Conv2d(16, 1, 1)
+
+    def _align(self, x, ref):
+        if x.shape[2:] != ref.shape[2:]:
+            x = F.interpolate(x, size=ref.shape[2:], mode="bilinear", align_corners=False)
+        return x
+
+    def forward(self, x):
+        s0 = self.stage0(x)
+        s1 = self.stage1(s0)
+        s2 = self.stage2(s1)
+        s3 = self.stage3(s2)
+        s4 = self.stage4(s3)
+        s5 = self.stage5(s4)
+        s6 = self.stage6(s5)
+        s7 = self.stage7(s6)
+
+        d = self.up1(s7)
+        d = self._align(d, s5)
+        d = self.dec1(torch.cat([d, s5], dim=1))
+
+        d = self.up2(d)
+        d = self._align(d, s3)
+        d = self.dec2(torch.cat([d, s3], dim=1))
+
+        d = self.up3(d)
+        d = self._align(d, s2)
+        d = self.dec3(torch.cat([d, s2], dim=1))
+
+        d = self.up4(d)
+        d = self._align(d, s1)
+        d = self.dec4(torch.cat([d, s1], dim=1))
+
+        d = self.final_up(d)
+        d = self.final_conv(d)
+
+        return self.head(d)
 
 # ── Loss ──────────────────────────────────────────────────────────────────────
 
@@ -677,12 +780,107 @@ class CombinedLoss(nn.Module):
 # ── Metrics ───────────────────────────────────────────────────────────────────
 
 @torch.no_grad()
-def compute_iou(logits: torch.Tensor, masks: torch.Tensor,
-                threshold: float = 0.5) -> float:
+def compute_iou(
+    logits: torch.Tensor,
+    masks: torch.Tensor,
+    threshold: float = 0.5,
+    use_postprocessing: bool = False,
+    min_component_size: int = 0,
+) -> float:
     preds = (torch.sigmoid(logits) > threshold).float()
+
+    if use_postprocessing:
+        preds = remove_small_components(preds, min_component_size)
+
     inter = (preds * masks).sum().item()
     union = (preds + masks - preds * masks).sum().item()
     return inter / max(union, 1.0)
+
+def remove_small_components(preds: torch.Tensor, min_size: int) -> torch.Tensor:
+    """
+    Entfernt kleine zusammenhängende Komponenten aus binären Vorhersagemasken.
+    preds: Tensor mit Shape (B, 1, H, W), Werte 0 oder 1
+    """
+    preds_np = preds.cpu().numpy().astype(np.uint8)
+    cleaned = np.zeros_like(preds_np)
+
+    for b in range(preds_np.shape[0]):
+        mask = preds_np[b, 0]  # (H, W)
+
+        visited = np.zeros_like(mask, dtype=bool)
+        h, w = mask.shape
+
+        for y in range(h):
+            for x in range(w):
+                if mask[y, x] == 0 or visited[y, x]:
+                    continue
+
+                # Flood fill / connected component
+                stack = [(y, x)]
+                component = []
+                visited[y, x] = True
+
+                while stack:
+                    cy, cx = stack.pop()
+                    component.append((cy, cx))
+
+                    for ny, nx in [(cy-1, cx), (cy+1, cx), (cy, cx-1), (cy, cx+1)]:
+                        if 0 <= ny < h and 0 <= nx < w:
+                            if mask[ny, nx] == 1 and not visited[ny, nx]:
+                                visited[ny, nx] = True
+                                stack.append((ny, nx))
+
+                if len(component) >= min_size:
+                    for cy, cx in component:
+                        cleaned[b, 0, cy, cx] = 1
+
+    return torch.from_numpy(cleaned).to(preds.device).float()
+
+
+def save_error_sample(
+    image_tensor: torch.Tensor,
+    mask_tensor: torch.Tensor,
+    pred_tensor: torch.Tensor,
+    save_dir: Path,
+    epoch: int,
+    sample_idx: int,
+    pred_area: float,
+    gt_area: float,
+    iou: float,
+) -> None:
+    """
+    Speichert ein Fehlerbeispiel für die spätere Analyse.
+    Erwartet einzelne Tensors mit Shapes:
+      image_tensor: (3, H, W)
+      mask_tensor:  (1, H, W)
+      pred_tensor:  (1, H, W)
+    """
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    # Bild wieder in [0,255] zurückwandeln
+    image = image_tensor.detach().cpu().numpy().transpose(1, 2, 0)
+    mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+    std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+    image = (image * std + mean).clip(0, 1)
+    image = (image * 255).astype(np.uint8)
+
+    mask = (mask_tensor.detach().cpu().numpy()[0] * 255).astype(np.uint8)
+    pred = (pred_tensor.detach().cpu().numpy()[0] * 255).astype(np.uint8)
+
+    stem = f"epoch{epoch:03d}_sample{sample_idx:03d}"
+
+    Image.fromarray(image).save(save_dir / f"{stem}_image.png")
+    Image.fromarray(mask).save(save_dir / f"{stem}_mask.png")
+    Image.fromarray(pred).save(save_dir / f"{stem}_pred.png")
+
+    info = {
+        "epoch": epoch,
+        "sample_idx": sample_idx,
+        "pred_area": float(pred_area),
+        "gt_area": float(gt_area),
+        "iou": float(iou),
+    }
+    (save_dir / f"{stem}_info.json").write_text(json.dumps(info, indent=2))
 
 
 # ── Training loop ─────────────────────────────────────────────────────────────
@@ -695,125 +893,7 @@ def get_device() -> torch.device:
     return torch.device("cpu")
 
 
-def _artifact_suffix(location: str) -> Path | None:
-    """Extract the path suffix behind 'mlruns/' from legacy MLflow locations."""
-    if not location:
-        return None
-
-    normalized = location.replace("\\", "/")
-    if normalized.startswith("file://"):
-        normalized = unquote(urlparse(normalized).path).replace("\\", "/")
-        # Windows file URIs look like "/C:/..."; strip the leading slash back off.
-        if len(normalized) >= 3 and normalized[0] == "/" and normalized[2] == ":":
-            normalized = normalized[1:]
-
-    marker = "mlruns/"
-    idx = normalized.lower().find(marker)
-    if idx == -1:
-        stripped = normalized.lstrip("./").strip("/")
-        return Path() if stripped.lower() == "mlruns" else None
-
-    suffix = normalized[idx + len(marker):].strip("/")
-    return Path(suffix) if suffix else Path()
-
-
-def configure_local_mlflow() -> None:
-    """
-    Keep MLflow on the repo-local SQLite DB and repair legacy artifact paths.
-
-    The repository already contains old runs from another machine with absolute
-    artifact paths. Rewriting them to the local `mlruns/` folder prevents the
-    MLflow UI from failing to fetch artifacts on this machine.
-    """
-    mlflow.set_tracking_uri(f"sqlite:///{MLFLOW_DB.resolve().as_posix()}")
-    MLFLOW_ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
-
-    if not MLFLOW_DB.exists():
-        return
-
-    conn = sqlite3.connect(MLFLOW_DB)
-    try:
-        cur = conn.cursor()
-
-        for experiment_id, location in cur.execute(
-            "SELECT experiment_id, artifact_location FROM experiments"
-        ).fetchall():
-            suffix = _artifact_suffix(location)
-            if suffix is None:
-                continue
-
-            desired_location = (MLFLOW_ARTIFACTS_DIR / suffix).resolve().as_uri()
-            if location != desired_location:
-                cur.execute(
-                    "UPDATE experiments SET artifact_location=? WHERE experiment_id=?",
-                    (desired_location, experiment_id),
-                )
-
-        for run_id, artifact_uri in cur.execute(
-            "SELECT run_uuid, artifact_uri FROM runs"
-        ).fetchall():
-            suffix = _artifact_suffix(artifact_uri)
-            if suffix is None:
-                continue
-
-            desired_uri = (MLFLOW_ARTIFACTS_DIR / suffix).resolve().as_uri()
-            if artifact_uri != desired_uri:
-                cur.execute(
-                    "UPDATE runs SET artifact_uri=? WHERE run_uuid=?",
-                    (desired_uri, run_id),
-                )
-
-        conn.commit()
-    except sqlite3.OperationalError:
-        # Frische DBs haben die Tabellen evtl. noch nicht, bevor MLflow sie anlegt.
-        pass
-    finally:
-        conn.close()
-
-
-MODEL_REGISTRY = {
-    # Zentrale Modellliste, damit CLI-Auswahl und Vergleichslaeufe dieselbe
-    # Definition verwenden.
-    "unet": {
-        "label": "UNet",
-        "factory": lambda: UNet(dropout=DROPOUT),
-    },
-    "resnet34": {
-        "label": "ResNet34-pretrained",
-        "factory": lambda: ResNet34UNet(dropout=DROPOUT),
-    },
-    "resnet50": {
-        "label": "ResNet50-pretrained",
-        "factory": lambda: ResNet50UNet(dropout=DROPOUT),
-    },
-    "efficientnetb3": {
-        "label": "EfficientNetB3-pretrained",
-        "factory": lambda: EfficientNetB3UNet(dropout=DROPOUT),
-    },
-    "efficientnetb4": {
-        "label": "EfficientNetB4-pretrained",
-        "factory": lambda: EfficientNetB4UNet(dropout=DROPOUT),
-    },
-}
-
-
-def get_model_names(selection: str) -> list[str]:
-    """Resolve a CLI selection to one or more concrete model names."""
-    if selection == "all":
-        return list(MODEL_REGISTRY.keys())
-    if selection not in MODEL_REGISTRY:
-        raise ValueError(
-            f"Unknown model '{selection}'. Available: {', '.join(['all', *MODEL_REGISTRY.keys()])}"
-        )
-    return [selection]
-
-
-def train(run_name: str, epochen: int, model_name: str):
-    if epochen < 1:
-        raise ValueError("epochen must be >= 1")
-    if model_name not in MODEL_REGISTRY:
-        raise ValueError(f"model_name must be one of: {', '.join(MODEL_REGISTRY.keys())}")
-
+def train(run_name: str, epochs: int):
     device = get_device()
     print(f"Device: {device}")
 
@@ -831,10 +911,7 @@ def train(run_name: str, epochen: int, model_name: str):
                               persistent_workers=True)
 
     # ── Model ─────────────────────────────────────────────────────────────
-    # Das Modell wird jetzt ueber die Registry gewaehlt, damit alle
-    # Architekturen mit identischem Trainingsablauf verglichen werden koennen.
-    model_info = MODEL_REGISTRY[model_name]
-    model = model_info["factory"]().to(device)
+    model = EfficientNetB1UNet(dropout=DROPOUT).to(device)
 
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {model_name}")
@@ -847,9 +924,7 @@ def train(run_name: str, epochen: int, model_name: str):
         optimizer,
         max_lr=LR,
         steps_per_epoch=len(train_loader),
-        # Der Scheduler muss dieselbe Epochenzahl kennen wie das Training,
-        # sonst passt die LR-Kurve nicht mehr zum echten Run.
-        epochs=epochen,
+        epochs=epochs,
         pct_start=0.05,
     )
     criterion = CombinedLoss(pos_weight=pos_weight).to(device)
@@ -866,12 +941,12 @@ def train(run_name: str, epochen: int, model_name: str):
     mlflow.set_experiment(MLFLOW_EXPERIMENT)
     with mlflow.start_run(run_name=run_name):
         mlflow.log_params({
-            "model_name":        model_name,
+            "model_name": "EfficientNetB1UNet",
             "batch_size":        BATCH_SIZE,
             "crop_size":         CROP_SIZE,
             "lr":                LR,
             "weight_decay":      WEIGHT_DECAY,
-            "encoder_channels":  model_info["label"],
+            "encoder_channels":  "EfficientNetB1-pretrained",
             "decoder_channels":  str(DECODER_CHANNELS),
             "dropout":           DROPOUT,
             "pos_weight":        pos_weight,
@@ -880,101 +955,186 @@ def train(run_name: str, epochen: int, model_name: str):
             "loss":              "BCE+Dice",
             "total_params":      total_params,
             "device":            str(device),
-            "epochs":            epochen,
+            "epochs_target":     epochs,
+            "use_ground_roi":    USE_GROUND_ROI,
+            "ground_roi_top":     GROUND_ROI_TOP,
+            "use_postprocessing": USE_POSTPROCESSING,
+            "min_component_size": MIN_COMPONENT_SIZE,
+            "use_error_analysis": USE_ERROR_ANALYSIS,
+            "max_error_samples_per_epoch": MAX_ERROR_SAMPLES_PER_EPOCH,
+            "false_positive_threshold": FALSE_POSITIVE_THRESHOLD,
         })
+        error_analysis_dir = Path(ERROR_ANALYSIS_DIR)
+        if USE_ERROR_ANALYSIS:
+            error_analysis_dir.mkdir(parents=True, exist_ok=True)
 
+        
         t0 = time.time()
+        step = 0
         best_val_iou = 0.0
+        best_threshold_overall = DEFAULT_THRESHOLD
 
-        # Die Schleife ist jetzt explizit epochenbasiert statt indirekt über
-        # einen Abbruch mitten in einer while-Schleife.
-        for epoch in range(1, epochen + 1):
+        for epoch in range(1, epochs + 1):
             model.train()
             train_loss = 0.0
-            train_iou  = 0.0
+            train_iou = 0.0
 
             for images, masks in train_loader:
                 images = images.to(device, non_blocking=True)
-                masks  = masks.to(device,  non_blocking=True)
+                masks = masks.to(device, non_blocking=True)
 
                 optimizer.zero_grad(set_to_none=True)
                 logits = model(images)
-                loss   = criterion(logits, masks)
+                loss = criterion(logits, masks)
                 loss.backward()
                 nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 optimizer.step()
                 scheduler.step()
 
                 train_loss += loss.item()
-                train_iou  += compute_iou(logits, masks)
+                train_iou += compute_iou(
+                    logits,
+                    masks,
+                    threshold=DEFAULT_THRESHOLD,
+                    use_postprocessing=USE_POSTPROCESSING,
+                    min_component_size=MIN_COMPONENT_SIZE,
+                )
+                step += 1
+                if step % 10 == 0:
+                    elapsed = time.time() - t0
+                    print(f"step={step}  loss={loss.item():.4f}  elapsed={elapsed:.0f}s")
 
             # ── Validation ────────────────────────────────────────────
             model.eval()
             val_loss = 0.0
-            val_iou  = 0.0
+            val_iou = 0.0
+
+            error_candidates = []
+            threshold_scores = {t: 0.0 for t in THRESHOLD_CANDIDATES}
+
             with torch.no_grad():
                 for images, masks in val_loader:
                     images = images.to(device, non_blocking=True)
-                    masks  = masks.to(device,  non_blocking=True)
+                    masks = masks.to(device, non_blocking=True)
                     logits = model(images)
+
+                    if USE_ERROR_ANALYSIS:
+                        probs = torch.sigmoid(logits)
+                        preds = (probs > DEFAULT_THRESHOLD).float()
+
+                        if USE_POSTPROCESSING:
+                            preds = remove_small_components(preds, MIN_COMPONENT_SIZE)
+
+                        for b in range(images.size(0)):
+                            pred_area = preds[b].sum().item()
+                            gt_area = masks[b].sum().item()
+
+                            if gt_area < 1.0 and pred_area > FALSE_POSITIVE_THRESHOLD * preds[b].numel():
+                                iou = compute_iou(
+                                    logits[b:b+1],
+                                    masks[b:b+1],
+                                    threshold=DEFAULT_THRESHOLD,
+                                    use_postprocessing=USE_POSTPROCESSING,
+                                    min_component_size=MIN_COMPONENT_SIZE,
+                                )
+
+                                error_candidates.append((
+                                    iou,
+                                    images[b],
+                                    masks[b],
+                                    preds[b],
+                                    pred_area,
+                                    gt_area,
+                                ))
                     val_loss += criterion(logits, masks).item()
-                    val_iou  += compute_iou(logits, masks)
+                    val_iou += compute_iou(
+                        logits,
+                        masks,
+                        threshold=DEFAULT_THRESHOLD,
+                        use_postprocessing=USE_POSTPROCESSING,
+                        min_component_size=MIN_COMPONENT_SIZE,
+                    )
+
+                    for t in THRESHOLD_CANDIDATES:
+                        threshold_scores[t] += compute_iou(
+                            logits,
+                            masks,
+                            threshold=t,
+                            use_postprocessing=USE_POSTPROCESSING,
+                            min_component_size=MIN_COMPONENT_SIZE,
+                        )
 
             n_train = len(train_loader)
-            n_val   = len(val_loader)
+            n_val = len(val_loader)
             elapsed = time.time() - t0
+
+            threshold_scores = {t: v / max(n_val, 1) for t, v in threshold_scores.items()}
+            best_threshold = max(threshold_scores, key=threshold_scores.get)
+            best_threshold_iou = threshold_scores[best_threshold]
 
             metrics = {
                 "train_loss": train_loss / max(n_train, 1),
-                "train_iou":  train_iou  / max(n_train, 1),
-                "val_loss":   val_loss   / max(n_val,   1),
-                "val_iou":    val_iou    / max(n_val,   1),
-                "epoch":      epoch,
-                "elapsed_s":  elapsed,
-                "lr":         scheduler.get_last_lr()[0],
+                "train_iou": train_iou / max(n_train, 1),
+                "val_loss": val_loss / max(n_val, 1),
+                "val_iou": val_iou / max(n_val, 1),
+                "epoch": epoch,
+                "elapsed_s": elapsed,
+                "lr": scheduler.get_last_lr()[0],
+                "best_threshold": best_threshold,
+                "best_threshold_iou": best_threshold_iou,
             }
-            # MLflow-Step ebenfalls auf Epoche umstellen, damit UI und Logging
-            # dieselbe Zeitskala verwenden.
             mlflow.log_metrics(metrics, step=epoch)
 
-            if val_iou / max(n_val, 1) > best_val_iou:
-                best_val_iou = val_iou / max(n_val, 1)
-                # Pro Modell eigener Dateiname, damit Vergleichslaeufe einander
-                # die besten Gewichte nicht ueberschreiben.
-                best_model_path = f"best_model_{model_name}.pth"
-                torch.save(model.state_dict(), best_model_path)
-                mlflow.log_artifact(best_model_path)
+            if best_threshold_iou > best_val_iou:
+                best_val_iou = best_threshold_iou
+                best_threshold_overall = best_threshold
+                torch.save(model.state_dict(), "best_model.pth")
+                mlflow.log_artifact("best_model.pth")
+
+                with open("best_threshold.json", "w") as f:
+                    json.dump({"threshold": best_threshold_overall}, f)
 
             print(
-                f"epoch {epoch:3d}  "
+                f"epoch {epoch:3d}/{epochs:3d}  "
                 f"train_loss={metrics['train_loss']:.4f}  "
                 f"train_iou={metrics['train_iou']:.4f}  "
                 f"val_loss={metrics['val_loss']:.4f}  "
                 f"val_iou={metrics['val_iou']:.4f}  "
-                f"[{elapsed:.0f}s]"
+                f"[{elapsed:.0f}s]  "
+                f"best_threshold={best_threshold:.2f}  "
+                f"best_threshold_iou={best_threshold_iou:.4f}"
             )
+            if USE_ERROR_ANALYSIS and len(error_candidates) > 0:
+                error_candidates.sort(key=lambda x: x[0])  # kleinste IoU zuerst
 
-        mlflow.log_metric("best_val_iou", best_val_iou, step=epochen)
+                epoch_error_dir = error_analysis_dir / f"epoch_{epoch:03d}"
+
+                for sample_idx, (iou, image_t, mask_t, pred_t, pred_area, gt_area) in enumerate(
+                    error_candidates[:MAX_ERROR_SAMPLES_PER_EPOCH]
+                ):
+                    save_error_sample(
+                        image_tensor=image_t,
+                        mask_tensor=mask_t,
+                        pred_tensor=pred_t,
+                        save_dir=epoch_error_dir,
+                        epoch=epoch,
+                        sample_idx=sample_idx,
+                        pred_area=pred_area,
+                        gt_area=gt_area,
+                        iou=iou,
+                    )
+
+        mlflow.log_metric("best_val_iou", best_val_iou)
+        mlflow.log_param("best_threshold_final", best_threshold_overall)
         print(f"\nBest val_iou: {best_val_iou:.4f}")
         print("Run complete.")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--run-name",   default="baseline",
+    parser.add_argument("--run-name", default="baseline",
                         help="MLflow run name")
-    parser.add_argument("--epochen", type=int, default=EPOCHEN,
+    parser.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS,
                         help="Number of training epochs")
-    parser.add_argument(
-        "--model",
-        default="resnet34",
-        help="Model to train: all, unet, resnet34, resnet50, efficientnetb3, efficientnetb4",
-    )
     args = parser.parse_args()
-
-    selected_models = get_model_names(args.model)
-    for model_name in selected_models:
-        # Bei Sammellaeufen einen eindeutigen Run-Namen pro Modell erzeugen,
-        # damit MLflow die Vergleichslaeufe sauber auseinanderhalten kann.
-        run_name = args.run_name if len(selected_models) == 1 else f"{args.run_name}-{model_name}"
-        train(run_name=run_name, epochen=args.epochen, model_name=model_name)
+    train(run_name=args.run_name, epochs=args.epochs)
