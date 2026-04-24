@@ -13,6 +13,10 @@ Other approaches fine-tune a yolo model: e.g. see for https://github.com/jeremy-
 - [Task Description](docs/student_task.md)
 - [Context to this project](docs/explainer.md)
 
+## 2 Student Task
+
+- [Task Description 2](docs/student_task_2.md)
+
 ## Example images not in the dataset
 
 |No litter | Litter |

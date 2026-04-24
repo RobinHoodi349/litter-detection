@@ -22,6 +22,7 @@ import json
 import platform
 import random
 import sqlite3
+import time
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -30,6 +31,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.cuda.amp import GradScaler, autocast
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 import torchvision.models as tv_models
@@ -38,16 +40,26 @@ from albumentations.pytorch import ToTensorV2
 
 # ── Hyperparameters (edit freely) ─────────────────────────────────────────────
 
-DEFAULT_EPOCHS   = 5
+DEFAULT_EPOCHS   = 50
 DEFAULT_SEED     = 42
 BATCH_SIZE       = 8
-CROP_SIZE        = 384        # random-crop spatial resolution during training
+CROP_SIZE        = 256        # random-crop spatial resolution during training
 LR               = 8e-4
-WEIGHT_DECAY     = 1e-4
+WEIGHT_DECAY     = 1e-3
 ENCODER_CHANNELS = [64, 128, 256, 512]   # U-Net encoder stage widths
 DECODER_CHANNELS = [256, 128, 64, 32]    # U-Net decoder stage widths
-DROPOUT          = 0.1
+DROPOUT          = 0.25
 POS_WEIGHT       = 5.0        # BCEWithLogitsLoss pos_weight (handles class imbalance)
+USE_GROUND_ROI   = False
+GROUND_ROI_TOP   = 0.4
+DEFAULT_THRESHOLD = 0.7
+THRESHOLD_CANDIDATES = [0.5, 0.6, 0.7, 0.8, 0.9]
+USE_POSTPROCESSING = True
+MIN_COMPONENT_SIZE = 100
+USE_ERROR_ANALYSIS = True
+ERROR_ANALYSIS_DIR = "error_analysis"
+MAX_ERROR_SAMPLES_PER_EPOCH = 5
+FALSE_POSITIVE_THRESHOLD = 0.01
                                # override with value from data/meta.json
 
 # ── Data ──────────────────────────────────────────────────────────────────────
@@ -95,6 +107,16 @@ def dataset_fingerprint() -> str:
     return hasher.hexdigest()[:16]
 
 
+def crop_ground_roi(image: np.ndarray, mask: np.ndarray, roi_top: float):
+    h = image.shape[0]
+    y0 = int(h * roi_top)
+    cropped_image = image[y0:, :]
+    cropped_mask = mask[y0:, :]
+    if cropped_mask.sum() == 0:
+        return image, mask
+    return cropped_image, cropped_mask
+
+
 class LitterDataset(Dataset):
     def __init__(self, split: str, crop_size: int = CROP_SIZE, augment: bool = True):
         stems_file = DATA_DIR / f"{split}.txt"
@@ -102,23 +124,30 @@ class LitterDataset(Dataset):
         self.augment = augment
 
         if augment:
-            self.transform = A.Compose([
-                A.RandomResizedCrop(size=(crop_size, crop_size),
-                                    scale=(0.4, 1.0), ratio=(0.75, 1.33)),
+            self.spatial_transforms = A.Compose([
+                A.SmallestMaxSize(max_size=crop_size),
+                A.PadIfNeeded(min_height=crop_size, min_width=crop_size,
+                              border_mode=0, value=0, mask_value=0),
+                A.RandomCrop(height=crop_size, width=crop_size),
                 A.HorizontalFlip(p=0.5),
                 A.RandomRotate90(p=0.3),
-                A.ColorJitter(brightness=0.3, contrast=0.3,
-                              saturation=0.3, hue=0.05, p=0.7),
-                A.GaussNoise(p=0.2),
-                A.GridDistortion(p=0.3),
-                A.ElasticTransform(p=0.3),
+            ], additional_targets={"mask": "mask"})
+            self.image_transforms = A.Compose([
+                A.ColorJitter(brightness=0.2, contrast=0.2,
+                              saturation=0.2, hue=0.05, p=0.5),
+                A.GaussNoise(p=0.1),
                 A.Normalize(mean=(0.485, 0.456, 0.406),
                             std=(0.229, 0.224, 0.225)),
                 ToTensorV2(),
             ])
         else:
-            self.transform = A.Compose([
-                A.Resize(height=crop_size, width=crop_size),
+            self.spatial_transforms = A.Compose([
+                A.SmallestMaxSize(max_size=crop_size),
+                A.PadIfNeeded(min_height=crop_size, min_width=crop_size,
+                              border_mode=0, value=0, mask_value=0),
+                A.CenterCrop(height=crop_size, width=crop_size),
+            ], additional_targets={"mask": "mask"})
+            self.image_transforms = A.Compose([
                 A.Normalize(mean=(0.485, 0.456, 0.406),
                             std=(0.229, 0.224, 0.225)),
                 ToTensorV2(),
@@ -132,8 +161,15 @@ class LitterDataset(Dataset):
         image = np.array(Image.open(IMAGES_DIR / f"{stem}.jpg").convert("RGB"))
         mask  = (np.array(Image.open(MASKS_DIR / f"{stem}.png")) > 127).astype(np.float32)
 
-        out = self.transform(image=image, mask=mask)
-        return out["image"], out["mask"].unsqueeze(0)   # (3,H,W), (1,H,W)
+        if USE_GROUND_ROI:
+            image, mask = crop_ground_roi(image, mask, GROUND_ROI_TOP)
+
+        out = self.spatial_transforms(image=image, mask=mask)
+        image = out["image"]
+        mask = out["mask"]
+
+        out = self.image_transforms(image=image)
+        return out["image"], torch.from_numpy(mask).unsqueeze(0)
 
 
 # ── Model ─────────────────────────────────────────────────────────────────────
@@ -670,6 +706,83 @@ class EfficientNetB4UNet(nn.Module):
         return self.head(d)                         # 1 ch,   H/1
 
 
+class EfficientNetB1UNet(nn.Module):
+    """U-Net with a pretrained EfficientNet-B1 encoder."""
+
+    def __init__(self, dropout: float = DROPOUT):
+        super().__init__()
+
+        backbone = tv_models.efficientnet_b1(
+            weights=tv_models.EfficientNet_B1_Weights.IMAGENET1K_V1
+        )
+        features = backbone.features
+
+        self.stage0 = features[0]    # 32 ch, H/2
+        self.stage1 = features[1]    # 16 ch, H/2
+        self.stage2 = features[2]    # 24 ch, H/4
+        self.stage3 = features[3]    # 40 ch, H/8
+        self.stage4 = features[4]    # 80 ch, H/16
+        self.stage5 = features[5]    # 112 ch, H/16
+        self.stage6 = features[6]    # 192 ch, H/32
+        self.stage7 = features[7]    # 320 ch, H/32
+
+        for m in self.modules():
+            if isinstance(m, nn.BatchNorm2d):
+                m.weight.requires_grad_(False)
+                m.bias.requires_grad_(False)
+
+        self.up1 = nn.ConvTranspose2d(320, 112, 2, 2)
+        self.dec1 = ConvBlock(112 + 112, 256, dropout)
+
+        self.up2 = nn.ConvTranspose2d(256, 128, 2, 2)
+        self.dec2 = ConvBlock(128 + 40, 128, dropout)
+
+        self.up3 = nn.ConvTranspose2d(128, 64, 2, 2)
+        self.dec3 = ConvBlock(64 + 24, 64, dropout)
+
+        self.up4 = nn.ConvTranspose2d(64, 32, 2, 2)
+        self.dec4 = ConvBlock(32 + 16, 32, dropout)
+
+        self.final_up = nn.ConvTranspose2d(32, 16, 2, 2)
+        self.final_conv = ConvBlock(16, 16, dropout)
+        self.head = nn.Conv2d(16, 1, 1)
+
+    def _align(self, x, ref):
+        if x.shape[2:] != ref.shape[2:]:
+            x = F.interpolate(x, size=ref.shape[2:], mode="bilinear", align_corners=False)
+        return x
+
+    def forward(self, x):
+        s0 = self.stage0(x)
+        s1 = self.stage1(s0)
+        s2 = self.stage2(s1)
+        s3 = self.stage3(s2)
+        s4 = self.stage4(s3)
+        s5 = self.stage5(s4)
+        s6 = self.stage6(s5)
+        s7 = self.stage7(s6)
+
+        d = self.up1(s7)
+        d = self._align(d, s5)
+        d = self.dec1(torch.cat([d, s5], dim=1))
+
+        d = self.up2(d)
+        d = self._align(d, s3)
+        d = self.dec2(torch.cat([d, s3], dim=1))
+
+        d = self.up3(d)
+        d = self._align(d, s2)
+        d = self.dec3(torch.cat([d, s2], dim=1))
+
+        d = self.up4(d)
+        d = self._align(d, s1)
+        d = self.dec4(torch.cat([d, s1], dim=1))
+
+        d = self.final_up(d)
+        d = self.final_conv(d)
+        return self.head(d)
+
+
 # ── Loss ──────────────────────────────────────────────────────────────────────
 
 class CombinedLoss(nn.Module):
@@ -699,12 +812,106 @@ class CombinedLoss(nn.Module):
 # ── Metrics ───────────────────────────────────────────────────────────────────
 
 @torch.no_grad()
-def compute_iou(logits: torch.Tensor, masks: torch.Tensor,
-                threshold: float = 0.5) -> float:
+def compute_iou(
+    logits: torch.Tensor,
+    masks: torch.Tensor,
+    threshold: float = DEFAULT_THRESHOLD,
+    use_postprocessing: bool = False,
+    min_component_size: int = 0,
+) -> float:
     preds = (torch.sigmoid(logits) > threshold).float()
+    if use_postprocessing:
+        preds = remove_small_components(preds, min_component_size)
     inter = (preds * masks).sum().item()
     union = (preds + masks - preds * masks).sum().item()
     return inter / max(union, 1.0)
+
+
+def _iou_from_probs(
+    probs: torch.Tensor,
+    masks: torch.Tensor,
+    threshold: float,
+    use_postprocessing: bool = False,
+    min_component_size: int = 0,
+) -> float:
+    preds = (probs > threshold).float()
+    if use_postprocessing:
+        preds = remove_small_components(preds, min_component_size)
+    inter = (preds * masks).sum().item()
+    union = (preds + masks - preds * masks).sum().item()
+    return inter / max(union, 1.0)
+
+
+def remove_small_components(preds: torch.Tensor, min_size: int) -> torch.Tensor:
+    preds_np = preds.cpu().numpy().astype(np.uint8)
+    cleaned = np.zeros_like(preds_np)
+
+    for b in range(preds_np.shape[0]):
+        mask = preds_np[b, 0]
+        visited = np.zeros_like(mask, dtype=bool)
+        h, w = mask.shape
+
+        for y in range(h):
+            for x in range(w):
+                if mask[y, x] == 0 or visited[y, x]:
+                    continue
+
+                stack = [(y, x)]
+                component = []
+                visited[y, x] = True
+
+                while stack:
+                    cy, cx = stack.pop()
+                    component.append((cy, cx))
+
+                    for ny, nx in ((cy - 1, cx), (cy + 1, cx), (cy, cx - 1), (cy, cx + 1)):
+                        if 0 <= ny < h and 0 <= nx < w:
+                            if mask[ny, nx] == 1 and not visited[ny, nx]:
+                                visited[ny, nx] = True
+                                stack.append((ny, nx))
+
+                if len(component) >= min_size:
+                    for cy, cx in component:
+                        cleaned[b, 0, cy, cx] = 1
+
+    return torch.from_numpy(cleaned).to(preds.device).float()
+
+
+def save_error_sample(
+    image_tensor: torch.Tensor,
+    mask_tensor: torch.Tensor,
+    pred_tensor: torch.Tensor,
+    save_dir: Path,
+    epoch: int,
+    sample_idx: int,
+    pred_area: float,
+    gt_area: float,
+    iou: float,
+) -> None:
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    image = image_tensor.detach().cpu().numpy().transpose(1, 2, 0)
+    mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+    std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+    image = (image * std + mean).clip(0, 1)
+    image = (image * 255).astype(np.uint8)
+
+    mask = (mask_tensor.detach().cpu().numpy()[0] * 255).astype(np.uint8)
+    pred = (pred_tensor.detach().cpu().numpy()[0] * 255).astype(np.uint8)
+    stem = f"epoch{epoch:03d}_sample{sample_idx:03d}"
+
+    Image.fromarray(image).save(save_dir / f"{stem}_image.png")
+    Image.fromarray(mask).save(save_dir / f"{stem}_mask.png")
+    Image.fromarray(pred).save(save_dir / f"{stem}_pred.png")
+
+    info = {
+        "epoch": epoch,
+        "sample_idx": sample_idx,
+        "pred_area": float(pred_area),
+        "gt_area": float(gt_area),
+        "iou": float(iou),
+    }
+    (save_dir / f"{stem}_info.json").write_text(json.dumps(info, indent=2))
 
 
 # ── Training loop ─────────────────────────────────────────────────────────────
@@ -816,6 +1023,10 @@ MODEL_REGISTRY = {
         "label": "EfficientNetB4-pretrained",
         "factory": lambda: EfficientNetB4UNet(dropout=DROPOUT),
     },
+    "efficientnetb1": {
+        "label": "EfficientNetB1-pretrained",
+        "factory": lambda: EfficientNetB1UNet(dropout=DROPOUT),
+    },
 }
 
 
@@ -874,12 +1085,13 @@ def train(run_name: str, epochs: int, model_name: str, seed: int):
         optimizer,
         max_lr=LR,
         steps_per_epoch=len(train_loader),
-        # Der Scheduler muss dieselbe Epochenzahl kennen wie das Training,
-        # sonst passt die LR-Kurve nicht mehr zum echten Run.
         epochs=epochs,
-        pct_start=0.05,
+        pct_start=0.15,
+        anneal_strategy="cos",
     )
     criterion = CombinedLoss(pos_weight=pos_weight).to(device)
+    amp_enabled = device.type == "cuda"
+    scaler = GradScaler(enabled=amp_enabled)
 
     # ── MLflow ────────────────────────────────────────────────────────────
     configure_local_mlflow()
@@ -920,6 +1132,15 @@ def train(run_name: str, epochs: int, model_name: str, seed: int):
             "train_samples":     len(train_ds),
             "val_samples":       len(val_ds),
             "seed":              seed,
+            "default_threshold": DEFAULT_THRESHOLD,
+            "threshold_candidates": str(THRESHOLD_CANDIDATES),
+            "use_ground_roi": USE_GROUND_ROI,
+            "ground_roi_top": GROUND_ROI_TOP,
+            "use_postprocessing": USE_POSTPROCESSING,
+            "min_component_size": MIN_COMPONENT_SIZE,
+            "use_error_analysis": USE_ERROR_ANALYSIS,
+            "max_error_samples_per_epoch": MAX_ERROR_SAMPLES_PER_EPOCH,
+            "false_positive_threshold": FALSE_POSITIVE_THRESHOLD,
         })
         mlflow.set_tags({
             "comparison_basis": "fixed_epochs",
@@ -927,12 +1148,19 @@ def train(run_name: str, epochs: int, model_name: str, seed: int):
             "host": platform.node() or "unknown-host",
             "platform": platform.platform(),
             "torch_version": torch.__version__,
-            "run_schema": "epoch_based_v2",
+            "run_schema": "epoch_based_v3",
         })
 
         best_val_iou = 0.0
         best_epoch = 0
+        best_threshold_overall = DEFAULT_THRESHOLD
         best_model_path = MODELS_DIR / f"best_model_{model_name}_{run_id}.pth"
+        best_threshold_path = MODELS_DIR / f"best_threshold_{model_name}_{run_id}.json"
+        error_analysis_dir = REPO_ROOT / ERROR_ANALYSIS_DIR
+        if USE_ERROR_ANALYSIS:
+            error_analysis_dir.mkdir(parents=True, exist_ok=True)
+        t0 = time.time()
+        step = 0
 
         # Die Schleife ist jetzt explizit epochenbasiert statt indirekt über
         # einen Abbruch mitten in einer while-Schleife.
@@ -946,27 +1174,80 @@ def train(run_name: str, epochs: int, model_name: str, seed: int):
                 masks  = masks.to(device,  non_blocking=True)
 
                 optimizer.zero_grad(set_to_none=True)
-                logits = model(images)
-                loss   = criterion(logits, masks)
-                loss.backward()
+                with autocast(enabled=amp_enabled):
+                    logits = model(images)
+                    loss   = criterion(logits, masks)
+                scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
                 nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                optimizer.step()
+                scaler.step(optimizer)
+                scaler.update()
                 scheduler.step()
 
                 train_loss += loss.item()
-                train_iou  += compute_iou(logits, masks)
+                train_iou  += compute_iou(
+                    logits,
+                    masks,
+                    threshold=DEFAULT_THRESHOLD,
+                    use_postprocessing=USE_POSTPROCESSING,
+                    min_component_size=MIN_COMPONENT_SIZE,
+                )
+                step += 1
 
             # ── Validation ────────────────────────────────────────────
             model.eval()
             val_loss = 0.0
             val_iou  = 0.0
+            error_candidates = []
+            threshold_scores = {threshold: 0.0 for threshold in THRESHOLD_CANDIDATES}
             with torch.no_grad():
                 for images, masks in val_loader:
                     images = images.to(device, non_blocking=True)
                     masks  = masks.to(device,  non_blocking=True)
                     logits = model(images)
+                    probs = torch.sigmoid(logits)
+
+                    if USE_ERROR_ANALYSIS:
+                        preds = (probs > DEFAULT_THRESHOLD).float()
+                        if USE_POSTPROCESSING:
+                            preds = remove_small_components(preds, MIN_COMPONENT_SIZE)
+
+                        for b in range(images.size(0)):
+                            pred_area = preds[b].sum().item()
+                            gt_area = masks[b].sum().item()
+                            if gt_area < 1.0 and pred_area > FALSE_POSITIVE_THRESHOLD * preds[b].numel():
+                                iou = _iou_from_probs(
+                                    probs[b:b + 1],
+                                    masks[b:b + 1],
+                                    DEFAULT_THRESHOLD,
+                                    USE_POSTPROCESSING,
+                                    MIN_COMPONENT_SIZE,
+                                )
+                                error_candidates.append((
+                                    iou,
+                                    images[b],
+                                    masks[b],
+                                    preds[b],
+                                    pred_area,
+                                    gt_area,
+                                ))
+
                     val_loss += criterion(logits, masks).item()
-                    val_iou  += compute_iou(logits, masks)
+                    val_iou  += _iou_from_probs(
+                        probs,
+                        masks,
+                        DEFAULT_THRESHOLD,
+                        USE_POSTPROCESSING,
+                        MIN_COMPONENT_SIZE,
+                    )
+                    for threshold in THRESHOLD_CANDIDATES:
+                        threshold_scores[threshold] += _iou_from_probs(
+                            probs,
+                            masks,
+                            threshold,
+                            USE_POSTPROCESSING,
+                            MIN_COMPONENT_SIZE,
+                        )
 
             n_train = len(train_loader)
             n_val   = len(val_loader)
@@ -974,23 +1255,33 @@ def train(run_name: str, epochs: int, model_name: str, seed: int):
             train_iou_mean = train_iou / max(n_train, 1)
             val_loss_mean = val_loss / max(n_val, 1)
             val_iou_mean = val_iou / max(n_val, 1)
+            elapsed = time.time() - t0
+            threshold_scores = {t: v / max(n_val, 1) for t, v in threshold_scores.items()}
+            best_threshold = max(threshold_scores, key=threshold_scores.get)
+            best_threshold_iou = threshold_scores[best_threshold]
 
             metrics = {
                 "train_loss": train_loss_mean,
                 "train_iou":  train_iou_mean,
                 "val_loss":   val_loss_mean,
                 "val_iou":    val_iou_mean,
+                "epoch":      epoch,
+                "elapsed_s":  elapsed,
                 "lr":         scheduler.get_last_lr()[0],
+                "best_threshold": best_threshold,
+                "best_threshold_iou": best_threshold_iou,
             }
             # MLflow-Step ebenfalls auf Epoche umstellen, damit UI und Logging
             # dieselbe Zeitskala verwenden.
             mlflow.log_metrics(metrics, step=epoch)
 
-            if val_iou_mean > best_val_iou:
-                best_val_iou = val_iou_mean
+            if best_threshold_iou > best_val_iou:
+                best_val_iou = best_threshold_iou
                 best_epoch = epoch
+                best_threshold_overall = best_threshold
                 torch.save(model.state_dict(), best_model_path)
                 mlflow.set_tag("best_checkpoint", best_model_path.name)
+                best_threshold_path.write_text(json.dumps({"threshold": best_threshold_overall}, indent=2))
 
             print(
                 f"epoch {epoch:3d}/{epochs:3d}  "
@@ -998,17 +1289,40 @@ def train(run_name: str, epochs: int, model_name: str, seed: int):
                 f"train_iou={train_iou_mean:.4f}  "
                 f"val_loss={val_loss_mean:.4f}  "
                 f"val_iou={val_iou_mean:.4f}  "
+                f"best_threshold={best_threshold:.2f}  "
+                f"best_threshold_iou={best_threshold_iou:.4f}  "
                 f"best_val_iou={best_val_iou:.4f}@{best_epoch}"
             )
 
+            if USE_ERROR_ANALYSIS and error_candidates:
+                error_candidates.sort(key=lambda x: x[0])
+                epoch_error_dir = error_analysis_dir / f"epoch_{epoch:03d}"
+                for sample_idx, (iou, image_t, mask_t, pred_t, pred_area, gt_area) in enumerate(
+                    error_candidates[:MAX_ERROR_SAMPLES_PER_EPOCH]
+                ):
+                    save_error_sample(
+                        image_tensor=image_t,
+                        mask_tensor=mask_t,
+                        pred_tensor=pred_t,
+                        save_dir=epoch_error_dir,
+                        epoch=epoch,
+                        sample_idx=sample_idx,
+                        pred_area=pred_area,
+                        gt_area=gt_area,
+                        iou=iou,
+                    )
+
         if best_model_path.exists():
             mlflow.log_artifact(str(best_model_path), artifact_path="checkpoints")
+        if best_threshold_path.exists():
+            mlflow.log_artifact(str(best_threshold_path), artifact_path="checkpoints")
 
         mlflow.log_metrics({
             "best_val_iou": float(best_val_iou),
             "best_epoch": float(best_epoch),
+            "best_threshold_final": float(best_threshold_overall),
             "epochs_completed": float(epochs),
-            "optimizer_steps_completed": float(optimizer_steps_target),
+            "optimizer_steps_completed": float(step),
         }, step=epochs)
         mlflow.log_dict({
             "run_id": run_id,
@@ -1021,8 +1335,10 @@ def train(run_name: str, epochs: int, model_name: str, seed: int):
             "epochs_completed": epochs,
             "steps_per_epoch": steps_per_epoch,
             "optimizer_steps_target": optimizer_steps_target,
+            "optimizer_steps_completed": step,
             "best_epoch": best_epoch,
             "best_val_iou": best_val_iou,
+            "best_threshold": best_threshold_overall,
             "best_checkpoint": best_model_path.name,
         }, "comparison_manifest.json")
         print(f"\nBest val_iou: {best_val_iou:.4f}")
@@ -1040,8 +1356,8 @@ if __name__ == "__main__":
                         help="Random seed used for fair, reproducible comparisons")
     parser.add_argument(
         "--model",
-        default="resnet34",
-        help="Model to train: all, unet, resnet34, resnet50, efficientnetb3, efficientnetb4",
+        default="efficientnetb1",
+        help="Model to train: all, unet, resnet34, resnet50, efficientnetb3, efficientnetb4, efficientnetb1",
     )
     args = parser.parse_args()
 

@@ -1,16 +1,26 @@
 name: litter-detection
 
 services:
+  mlflow:
+    image: python:3.12
+    command: sh -c "pip install mlflow==3.11.1 && mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri sqlite:////mlflow/backend/mlflow.db --default-artifact-root /mlflow/artifacts"
+    container_name: litter-mlflow
+    ports:
+      - "5000:5000"
+    volumes:
+      # Bind local mlflow.db und mlruns folder so the server can access existing runs
+      - ../mlflow.db:/mlflow/backend/mlflow.db
+      - ../mlruns:/mlflow/artifacts
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
 
-  # ── grafana/otel-lgtm ────────────────────────────────────────────────────────
-  # All-in-one image: Grafana + Loki + Tempo + Prometheus + OTel Collector.
-  # Datasources (Prometheus, Loki, Tempo) are pre-wired inside the image.
   lgtm:
     image: grafana/otel-lgtm
     ports:
-      - "4317:4317"   # OTLP gRPC  (app → collector)
-      - "4318:4318"   # OTLP HTTP  (app → collector)
-      - "3000:3000"   # Grafana UI
+      - "4317:4317"
+      - "4318:4318"   
+      - "3000:3000"   # Grafana
     volumes:
       - ./grafana/provisioning/dashboards:/otel-lgtm/grafana/conf/provisioning/dashboards:ro
       - ./grafana/dashboards:/otel-lgtm/dashboards:ro
@@ -22,6 +32,7 @@ services:
     restart: unless-stopped
 
 volumes:
+  mlflow_data:
   grafana_data:
   prometheus_data:
   loki_data:
