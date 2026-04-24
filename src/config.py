@@ -15,6 +15,7 @@ class Settings:
     FRAME_MAX_AGE_SECONDS:int = 1
     PROCESSING_TIMEOUT_SECONDS:int = 5
     THRESHOLD:float = 0.8
+    LITTER_COVERAGE_THRESHOLD:float = 0.01  # min fraction of pixels to trigger reactor
     
     # Zenoh config
     ZENOH_ROUTER:str =  "tcp/localhost:7447"
@@ -22,6 +23,9 @@ class Settings:
     topic_mask_binary:str = "litter/mask/binary"
     topic_mask_probabilities:str = "litter/mask/probabilities"
     topic_visualization:str = "litter/visualization"
+    topic_alert:str = "litter/alert"
+    topic_robodog_command:str = "litter/robodog/command"
+    topic_movement_blocked:str = "robodog/movement/blocked"
 
     # OpenTelemetry setup
 
