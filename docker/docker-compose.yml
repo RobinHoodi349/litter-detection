@@ -9,7 +9,7 @@ services:
       - "5000:5000"
     volumes:
       # Bind local mlflow.db und mlruns folder so the server can access existing runs
-      - ../mlflow.db:/mlflow/backend/mlflow.db
+      - ../artifacts/mlflow/mlflow.db:/mlflow/backend/mlflow.db
       - ../mlruns:/mlflow/artifacts
     restart: unless-stopped
     environment:
