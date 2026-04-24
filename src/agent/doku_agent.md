@@ -11,3 +11,7 @@ Agent --- Tools
                     |------ **Save & Send**: Bei erfolgreicher erkennung, Position speichern & senden.
                     |------ **Emote**: Bewegung & Sound bei erfolgreicher erkennung durchführen.
 ```
+
+### Update Agentstruktur
+
+![Agentstruktur](../../docs/images/agentstruktur.png)
