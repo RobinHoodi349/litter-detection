@@ -27,4 +27,4 @@ Agent --- Tools
 
 ### Update Agentstruktur
 
-![Agentstruktur](../../docs/images/agentstruktur.png)
+![Agentstruktur](../../docs/images/agentenstruktur.png)
