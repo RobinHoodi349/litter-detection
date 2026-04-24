@@ -50,18 +50,14 @@ def move_to_coordinate(
     position_tolerance_m: ToleranceMeters = 0.05,
     explore_timestamp: float | None = None,
 ) -> CoordinateMoveResult:
-    """Läuft zu einer bereits geplanten x/y-Zielkoordinate.
-
-    Dieses Tool plant keinen Pfad. Es setzt nur den nächsten Zielpunkt um,
-    den der Explore Agent geliefert hat.
-    """
+    """Läuft zu einer bereits geplanten x/y-Zielkoordinate."""
 
     deps = ctx.deps
     start_pose = deps.state.current_pose
     target_pose = RobotPose(
-        x_m=target_x_m,
-        y_m=target_y_m,
-        heading_deg=start_pose.heading_deg if start_pose is not None else 0.0,
+        x_m = target_x_m,
+        y_m = target_y_m,
+        heading_deg = start_pose.heading_deg if start_pose is not None else 0.0,
     )
 
     if start_pose is None:

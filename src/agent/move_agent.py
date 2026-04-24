@@ -44,9 +44,9 @@ def create_move_agent(model: str | None = None) -> Agent[MoveAgentDeps, str]:
 
     return Agent(
         model or DEFAULT_MOVE_AGENT_MODEL,
-        deps_type=MoveAgentDeps,
-        tools=[move_to_coordinate, walk, turn, stop_movement],
-        instructions=MOVE_AGENT_INSTRUCTIONS,
+        deps_type = MoveAgentDeps,
+        tools = [move_to_coordinate, walk, turn, stop_movement],
+        instructions = MOVE_AGENT_INSTRUCTIONS,
     )
 
 
@@ -56,7 +56,7 @@ move_agent = create_move_agent()
 def run_move_agent_sync(prompt: str, deps: MoveAgentDeps | None = None) -> str:
     """Führt den Move Agent synchron aus und gibt die finale Agentenantwort zurück."""
 
-    result = move_agent.run_sync(prompt, deps=deps or MoveAgentDeps.from_env())
+    result = move_agent.run_sync(prompt, deps = deps or MoveAgentDeps.from_env())
     return result.output
 
 

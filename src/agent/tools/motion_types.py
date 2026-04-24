@@ -136,11 +136,11 @@ class RobotMotionGateway:
     def from_env(cls) -> "RobotMotionGateway":
         """Erstellt ein Gateway aus Umgebungsvariablen."""
 
-        dry_run = _env_bool("MOVE_AGENT_DRY_RUN", default=True)
+        dry_run = _env_bool("MOVE_AGENT_DRY_RUN", default = True)
         return cls(
-            router=os.getenv("ZENOH_ROUTER", DEFAULT_ZENOH_ROUTER),
-            movement_topic=os.getenv("MOVE_AGENT_MOVEMENT_TOPIC", DEFAULT_MOVEMENT_TOPIC),
-            dry_run=dry_run,
+            router = os.getenv("ZENOH_ROUTER", DEFAULT_ZENOH_ROUTER),
+            movement_topic = os.getenv("MOVE_AGENT_MOVEMENT_TOPIC", DEFAULT_MOVEMENT_TOPIC),
+            dry_run = dry_run,
         )
 
     def publish_movement(self, command: MovementCommand) -> None:
@@ -235,9 +235,9 @@ class MoveAgentDeps:
         gateway = RobotMotionGateway.from_env()
         return cls(
             gateway=gateway,
-            execute_real_time=_env_bool("MOVE_AGENT_REAL_TIME", default=not gateway.dry_run),
-            auto_stop_after_tool=_env_bool("MOVE_AGENT_AUTO_STOP", default=True),
-            max_tool_duration_s=float(os.getenv("MOVE_AGENT_MAX_TOOL_DURATION_S", "10.0")),
+            execute_real_time = _env_bool("MOVE_AGENT_REAL_TIME", default = not gateway.dry_run),
+            auto_stop_after_tool = _env_bool("MOVE_AGENT_AUTO_STOP", default = True),
+            max_tool_duration_s = float(os.getenv("MOVE_AGENT_MAX_TOOL_DURATION_S", "10.0")),
         )
 
 
@@ -279,8 +279,8 @@ def execute_timed_movement(
     safe_command = command.capped()
     next_pose = _estimate_next_pose(
         deps.state.current_pose,
-        estimated_distance_m=estimated_distance_m,
-        estimated_turn_deg=estimated_turn_deg,
+        estimated_distance_m = estimated_distance_m,
+        estimated_turn_deg = estimated_turn_deg,
     )
 
     deps.gateway.publish_movement(safe_command)
@@ -303,13 +303,13 @@ def execute_timed_movement(
         cap_note = " Geschwindigkeiten wurden auf die erlaubten Grenzwerte begrenzt."
 
     return MovementToolResult(
-        ok=True,
-        message=f"Bewegungsbefehl ausgeführt.{cap_note}".strip(),
-        command=safe_command,
-        stop_command=stop_command,
-        pose=deps.state.current_pose,
-        topic=deps.gateway.movement_topic,
-        dry_run=deps.gateway.dry_run,
+        ok = True,
+        message = f"Bewegungsbefehl ausgeführt.{cap_note}".strip(),
+        command = safe_command,
+        stop_command = stop_command,
+        pose = deps.state.current_pose,
+        topic = deps.gateway.movement_topic,
+        dry_run = deps.gateway.dry_run,
     )
 
 
@@ -320,12 +320,12 @@ def stop_robot(deps: MoveAgentDeps, reason: str = "requested") -> MovementToolRe
     deps.gateway.publish_movement(command)
     deps.state.last_movement_command = command
     return MovementToolResult(
-        ok=True,
-        message=f"Roboter gestoppt: {reason}",
-        command=command,
-        pose=deps.state.current_pose,
-        topic=deps.gateway.movement_topic,
-        dry_run=deps.gateway.dry_run,
+        ok = True,
+        message = f"Roboter gestoppt: {reason}",
+        command = command,
+        pose = deps.state.current_pose,
+        topic = deps.gateway.movement_topic,
+        dry_run = deps.gateway.dry_run,
     )
 
 
@@ -351,7 +351,7 @@ def _stale_reason(source_timestamp: float | None, now: float) -> str | None:
         return None
 
     if now - source_timestamp > COMMAND_MAX_AGE_SECONDS:
-        return "Explore-Zeitstempel ist aelter als 1 Sekunde."
+        return "Explore-Zeitstempel ist älter als 1 Sekunde."
 
     return None
 
@@ -359,11 +359,11 @@ def _stale_reason(source_timestamp: float | None, now: float) -> str | None:
 def _rejected(message: str, deps: MoveAgentDeps) -> MovementToolResult:
     logger.warning("Movement rejected: %s", message)
     return MovementToolResult(
-        ok=False,
-        message=message,
-        pose=deps.state.current_pose,
-        topic=deps.gateway.movement_topic,
-        dry_run=deps.gateway.dry_run,
+        ok = False,
+        message = message,
+        pose = deps.state.current_pose,
+        topic = deps.gateway.movement_topic,
+        dry_run = deps.gateway.dry_run,
     )
 
 
