@@ -17,8 +17,12 @@ Fragen, die Sie sich stellen könnten:
 TODO:
 
 - [] Pfadplaner Agent + Doku (Berat) 
-- [] Move Agent + Doku (Marie)
+- [x] Move Agent + Doku (Marie)
 - [] Litter Detector Agent + Doku (Simon)
+- [] Evaluate Agent + Doku (Simon)
+- [] React Agent + Doku ()
+- [] Coordinator Agent + Doku (Simon)
+- [] Explore Agent + Doku (Berat)
 
 ## Aufgabe 1
 ### Erste Überlegung:
@@ -56,3 +60,8 @@ Die dazugehörigen Tools sind in den Dateien [`walk_tool.py`](tools/walk_tool.py
 
 **React Agent**
 
+## Aufgabe 2
+Die Verbindung zwischen Roboter und Agenten erfolgt über die Tools, die in den Agenten definiert sind. Jedes Tool sendet Befehle an den Roboterhund, um bestimmte Aktionen auszuführen, z. B. Laufen, Drehen oder Koordinieren. Die Tools verwenden die in `motion_types.py` definierten Datentypen, um die Befehle zu strukturieren und die Kommunikation zwischen Agenten und Roboter zu erleichtern. Die Agenten rufen die Tools auf, um die gewünschten Bewegungen oder Aktionen auszuführen, und die Tools übersetzen diese in konkrete Befehle, die an den Roboterhund gesendet werden. Die Tools können auch Rückmeldungen vom Roboter erhalten, um die Ausführung zu überwachen und gegebenenfalls Anpassungen vorzunehmen.
+
+## Aufgabe 3
+Die parallelen Aufgaben, die möglicherweise aktiv sind, umfassen das gleichzeitige Laufen und Scannen der Umgebung nach Müll. Während der Roboterhund sich bewegt, kann er kontinuierlich die Umgebung mit seinem Kamera Sensor überwachen, um potenziellen Müll zu erkennen. Wenn ein Müll erkannt wird, könnte der Roboterhund sofort eine Reaktion ausführen, z. B. eine Emote-Bewegung, um die Entdeckung zu signalisieren. Gleichzeitig könnte er die Position des Mülls speichern und an den Evaluate Agent senden, um die Informationen weiter zu verarbeiten. Die Interaktion mit einem Menschen könnte durch eine Sprachschnittstelle oder eine visuelle Anzeige erfolgen, die dem Benutzer Informationen über den Fortschritt des Roboters und die Entdeckungen liefert. Der Roboter könnte auch auf Befehle des Benutzers reagieren, z. B. um bestimmte Bereiche zu erkunden oder um Hilfe zu bitten, wenn er auf ein Hindernis stößt.
