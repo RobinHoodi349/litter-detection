@@ -1,5 +1,5 @@
-# Agentsaufbau
-Hier sollen die Überlegungen und Definitionen dokumentiert werden, die für die Aufgabe in betracht gezogen werden. Bezogen wird sich hier auf die Aufgabenstellung aus [dem Arbeitspaket für Labor 2](../../docs/student_task_2.md).
+# Agents Aufbau
+Hier sollen die Überlegungen und Definitionen dokumentiert werden, die für die Aufgabe in Betracht gezogen werden. Bezogen wird sich hier auf die Aufgabenstellung aus [dem Arbeitspaket für Labor 2](../../docs/student_task_2.md).
 
 ## Aufgaben:
 1. [x] Legen Sie fest, welche Agenten Sie benötigen, und definieren Sie die Aufgaben, die diese ausführen sollen. 
@@ -14,6 +14,12 @@ Fragen, die Sie sich stellen könnten:
 - Welche Komponente beobachtet die aktuelle Ausführung?
 - Wie wird ein Plan dargestellt?
 
+TODO:
+
+- [] Pfadplaner Agent + Doku (Berat) 
+- [] Move Agent + Doku (Marie)
+- [] Litter Detector Agent + Doku (Simon)
+
 ## Aufgabe 1
 ### Erste Überlegung:
 ```
@@ -25,6 +31,7 @@ Agent --- Tools
                     |------ **Emote**: Bewegung & Sound bei erfolgreicher erkennung durchführen.
 ```
 
-### Update Agentstruktur
+### Update Agent Struktur
 
-![Agentstruktur](../../docs/images/agentenstruktur.png)
+![Agent Struktur](../../docs/images/agentenstruktur.png)
+
