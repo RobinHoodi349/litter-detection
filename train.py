@@ -914,7 +914,6 @@ def train(run_name: str, epochs: int):
     model = EfficientNetB1UNet(dropout=DROPOUT).to(device)
 
     total_params = sum(p.numel() for p in model.parameters())
-    print(f"Model: {model_name}")
     print(f"Model parameters: {total_params:,}")
 
     # ── Optimizer + Schedule ──────────────────────────────────────────────
@@ -930,7 +929,6 @@ def train(run_name: str, epochs: int):
     criterion = CombinedLoss(pos_weight=pos_weight).to(device)
 
     # ── MLflow ────────────────────────────────────────────────────────────
-    configure_local_mlflow()
     if mlflow.get_experiment_by_name(MLFLOW_EXPERIMENT) is None:
         # Eigene Artifact-Location setzen, damit neue Runs nicht von impliziten
         # oder rechnerabhaengigen Default-Pfaden abhaengen.
