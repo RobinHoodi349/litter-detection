@@ -2,9 +2,9 @@ import sys
 from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SRC_ROOT = PROJECT_ROOT / "src"
-AUTO_RESEARCH_DIR = PROJECT_ROOT / "auto-research"
+TRAINING_DIR = PROJECT_ROOT / "src" / "training"
 sys.path.insert(0, str(SRC_ROOT))
-sys.path.insert(0, str(AUTO_RESEARCH_DIR))
+sys.path.insert(0, str(TRAINING_DIR))
 
 from src.config.config import Settings
 from train import *

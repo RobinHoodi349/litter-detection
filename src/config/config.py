@@ -2,8 +2,8 @@
 import sys
 from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
-AUTO_RESEARCH_DIR = REPO_ROOT / "auto-research"
-sys.path.insert(0, str(AUTO_RESEARCH_DIR))
+TRAINING_DIR = REPO_ROOT / "src" / "training"
+sys.path.insert(0, str(TRAINING_DIR))
 from train import *
 from dataclasses import dataclass
 @dataclass
