@@ -1,13 +1,11 @@
 import json
 import logging
-import os
 import sys
 import time
 
 import cv2
 import zenoh
-sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
-from src.config.config import Settings
+from config.config import Settings
 
 settings = Settings()
 
@@ -56,5 +54,9 @@ def publish_webcam():
         logger.info("Beende Webcam-Publisher.")
 
 
-if __name__ == "__main__":
+def main():
     publish_webcam()
+
+
+if __name__ == "__main__":
+    main()
