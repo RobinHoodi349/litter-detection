@@ -1,11 +1,12 @@
 from pathPlanerAgent import PathPlannerAgent
-from move_agent import MoveAgent
+from move_agent import run_move_agent_sync
+from src.agent.tools.motion_types import MoveAgentDeps
 
 
 class ExploreAgent:
-    def __init__(self, pathplanner=None, move_agent=None):
+    def __init__(self, pathplanner=None, move_agent_deps=None):
         self.pathplanner = pathplanner or PathPlannerAgent()
-        self.move_agent = move_agent or MoveAgent()
+        self.move_agent_deps = move_agent_deps or MoveAgentDeps.from_env()
 
         self.route = []
         self.active = False
@@ -78,10 +79,25 @@ class ExploreAgent:
 
         return self.execute_route()
 
+    def move_to_waypoint(self, waypoint):
+        prompt = (
+            "Fahre zur Zielkoordinate.\n"
+            f"Waypoint-ID: {waypoint.get('id')}\n"
+            f"x: {waypoint['x']}\n"
+            f"y: {waypoint['y']}\n"
+            "Quelle: explore_agent"
+        )
+
+        return run_move_agent_sync(prompt, deps=self.move_agent_deps)
+
+    def stop_move_agent(self):
+        prompt = "Stoppe sofort jede Bewegung. Quelle: explore_agent"
+        return run_move_agent_sync(prompt, deps=self.move_agent_deps)
+
     def execute_route(self):
         while self.active and self.current_waypoint_index < len(self.route):
             if self.blocked:
-                self.move_agent.stop()
+                self.stop_move_agent()
                 return {
                     "status": "blocked",
                     "agent": "explore_agent",
@@ -90,7 +106,18 @@ class ExploreAgent:
 
             waypoint = self.route[self.current_waypoint_index]
 
-            self.move_agent.move_to(waypoint)
+            move_result = self.move_to_waypoint(waypoint)
+
+            print(f"ExploreAgent: MoveAgent result for {waypoint['id']}: {move_result}")
+
+            if move_result is None or "error" in str(move_result).lower():
+                self.active = False
+                return {
+                    "status": "error",
+                    "agent": "explore_agent",
+                    "message": f"MoveAgent failed at waypoint {waypoint['id']}",
+                    "move_agent_result": str(move_result)
+                }
 
             self.current_waypoint_index += 1
 
@@ -104,13 +131,14 @@ class ExploreAgent:
 
     def block_exploration(self, request):
         self.blocked = True
-        self.move_agent.stop()
+        stop_result = self.stop_move_agent()
 
         return {
             "status": "blocked",
             "agent": "explore_agent",
             "reason": request.get("reason", "unknown"),
-            "current_waypoint_index": self.current_waypoint_index
+            "current_waypoint_index": self.current_waypoint_index,
+            "move_agent_result": str(stop_result)
         }
 
     def unblock_exploration(self):
@@ -128,15 +156,15 @@ class ExploreAgent:
     def stop_exploration(self):
         self.active = False
         self.blocked = False
-        self.move_agent.stop()
+        stop_result = self.stop_move_agent()
 
         return {
             "status": "stopped",
-            "agent": "explore_agent"
+            "agent": "explore_agent",
+            "move_agent_result": str(stop_result)
         }
 
 
-# Placeholder bis der echte CoordinationAgent integriert ist
 if __name__ == "__main__":
     explore_agent = ExploreAgent()
 
