@@ -35,7 +35,7 @@ from huggingface_hub import snapshot_download
 from tqdm import tqdm
 
 # ── Config ────────────────────────────────────────────────────────────────────
-REPO_ROOT     = Path(__file__).resolve().parents[1]
+REPO_ROOT     = Path(__file__).resolve().parents[2]
 IMAGE_SIZE    = 512          # spatial resolution stored on disk
 VAL_FRACTION  = 0.15
 RANDOM_SEED   = 42
