@@ -27,7 +27,12 @@ class Settings:
     topic_robodog_command:str = "litter/robodog/command"
     topic_movement_blocked:str = "robodog/movement/blocked"
 
-    # OpenTelemetry setup
+    # Vision verifier model (must support image input, e.g. llava, moondream)
+    VISION_MODEL_NAME: str = "llava:latest"
+    USE_VERIFIER: bool = True
+    # Seconds to ignore new detections after an alert (avoids re-triggering on same litter)
+    ALERT_COOLDOWN_S: float = 10.0
 
+    # OpenTelemetry setup
     SERVICE_NAME:str = "litter-detector"
     OTEL_ENDPOINT:str = "http://127.0.0.1:4317"
