@@ -9,8 +9,8 @@ import numpy as np
 import torch
 import zenoh
 
-from config import Settings
-from agent.models import DetectionResult
+from litter_detection.config import Settings
+from models import DetectionResult
 
 logger = logging.getLogger("litter-detector-agent")
 settings = Settings()

@@ -5,8 +5,8 @@ import time
 
 import zenoh
 
-from config import Settings
-from agent.models import DetectionResult, VerifiedDetection
+from litter_detection.config import Settings
+from models import DetectionResult, VerifiedDetection
 
 logger = logging.getLogger("litter-detector-agent")
 settings = Settings()

@@ -13,7 +13,7 @@ AUTO_RESEARCH_DIR = PROJECT_ROOT / "auto-research"
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(AUTO_RESEARCH_DIR))
 
-from config import Settings
+from litter_detection.config import Settings
 from agent.actions import block_movement, publish_zenoh_alert
 from agent.detector import LitterDetector
 from agent.models import VerifiedDetection

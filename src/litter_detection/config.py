@@ -1,11 +1,10 @@
-'''Configuration for the Litter Detector application''' 
-import sys
+'''Configuration for the Litter Detector application'''
 from pathlib import Path
-REPO_ROOT = Path(__file__).resolve().parents[1]
-AUTO_RESEARCH_DIR = REPO_ROOT / "auto-research"
-sys.path.insert(0, str(AUTO_RESEARCH_DIR))
-from train import *
 from dataclasses import dataclass
+from litter_detection.training.train import EfficientNetB4UNet
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
 @dataclass
 class Settings:
 # Model
@@ -17,6 +16,7 @@ class Settings:
     THRESHOLD:float = 0.8
     LITTER_COVERAGE_THRESHOLD:float = 0.01  # min fraction of pixels to trigger reactor
     
+
     # Zenoh config
     ZENOH_ROUTER:str =  "tcp/localhost:7447"
     topic_frame:str = "litter/frame"

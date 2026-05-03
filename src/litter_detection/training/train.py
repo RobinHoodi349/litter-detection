@@ -49,11 +49,10 @@ WEIGHT_DECAY     = 1e-3
 ENCODER_CHANNELS = [64, 128, 256, 512]   # U-Net encoder stage widths
 DECODER_CHANNELS = [256, 128, 64, 32]    # U-Net decoder stage widths
 DROPOUT          = 0.25
-POS_WEIGHT       = 5.0        # BCEWithLogitsLoss pos_weight (handles class imbalance)
+POS_WEIGHT       = 3.0        # BCEWithLogitsLoss pos_weight (handles class imbalance)
 USE_GROUND_ROI   = False
 GROUND_ROI_TOP   = 0.4
 DEFAULT_THRESHOLD = 0.7
-THRESHOLD_CANDIDATES = [0.5, 0.6, 0.7, 0.8, 0.85]
 
 USE_POSTPROCESSING = True
 MIN_COMPONENT_SIZE = 200
@@ -65,7 +64,7 @@ FALSE_POSITIVE_THRESHOLD = 0.01
 
 # ── Data ──────────────────────────────────────────────────────────────────────
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 DATA_DIR   = REPO_ROOT / "data"
 IMAGES_DIR = DATA_DIR / "images"
 MASKS_DIR  = DATA_DIR / "masks"
@@ -807,7 +806,7 @@ class CombinedLoss(nn.Module):
             targets_smooth = targets * (1.0 - self.label_smoothing) + 0.5 * self.label_smoothing
         else:
             targets_smooth = targets
-        return self.bce(logits, targets_smooth) + self.dice_loss(logits, targets)
+        return self.bce(logits, targets_smooth) + self.dice_loss(logits, targets_smooth)
 
 
 # ── Metrics ───────────────────────────────────────────────────────────────────
@@ -1134,7 +1133,6 @@ def train(run_name: str, epochs: int, model_name: str, seed: int):
             "val_samples":       len(val_ds),
             "seed":              seed,
             "default_threshold": DEFAULT_THRESHOLD,
-            "threshold_candidates": str(THRESHOLD_CANDIDATES),
             "use_ground_roi": USE_GROUND_ROI,
             "ground_roi_top": GROUND_ROI_TOP,
             "use_postprocessing": USE_POSTPROCESSING,
@@ -1154,7 +1152,6 @@ def train(run_name: str, epochs: int, model_name: str, seed: int):
 
         best_val_iou = 0.0
         best_epoch = 0
-        best_threshold_overall = DEFAULT_THRESHOLD
         best_model_path = MODELS_DIR / f"best_model_{model_name}_{run_id}.pth"
         best_threshold_path = MODELS_DIR / f"best_threshold_{model_name}_{run_id}.json"
         error_analysis_dir = REPO_ROOT / ERROR_ANALYSIS_DIR
@@ -1198,9 +1195,8 @@ def train(run_name: str, epochs: int, model_name: str, seed: int):
             # ── Validation ────────────────────────────────────────────
             model.eval()
             val_loss = 0.0
-            val_iou  = 0.0
+            val_iou_accum = 0.0
             error_candidates = []
-            threshold_scores = {threshold: 0.0 for threshold in THRESHOLD_CANDIDATES}
             with torch.no_grad():
                 for images, masks in val_loader:
                     images = images.to(device, non_blocking=True)
@@ -1234,32 +1230,21 @@ def train(run_name: str, epochs: int, model_name: str, seed: int):
                                 ))
 
                     val_loss += criterion(logits, masks).item()
-                    val_iou  += _iou_from_probs(
+                    val_iou_accum += _iou_from_probs(
                         probs,
                         masks,
                         DEFAULT_THRESHOLD,
                         USE_POSTPROCESSING,
                         MIN_COMPONENT_SIZE,
                     )
-                    for threshold in THRESHOLD_CANDIDATES:
-                        threshold_scores[threshold] += _iou_from_probs(
-                            probs,
-                            masks,
-                            threshold,
-                            USE_POSTPROCESSING,
-                            MIN_COMPONENT_SIZE,
-                        )
 
             n_train = len(train_loader)
             n_val   = len(val_loader)
             train_loss_mean = train_loss / max(n_train, 1)
             train_iou_mean = train_iou / max(n_train, 1)
             val_loss_mean = val_loss / max(n_val, 1)
-            val_iou_mean = val_iou / max(n_val, 1)
+            val_iou_mean = val_iou_accum / max(n_val, 1)
             elapsed = time.time() - t0
-            threshold_scores = {t: v / max(n_val, 1) for t, v in threshold_scores.items()}
-            best_threshold = max(threshold_scores, key=threshold_scores.get)
-            best_threshold_iou = threshold_scores[best_threshold]
 
             metrics = {
                 "train_loss": train_loss_mean,
@@ -1269,20 +1254,17 @@ def train(run_name: str, epochs: int, model_name: str, seed: int):
                 "epoch":      epoch,
                 "elapsed_s":  elapsed,
                 "lr":         scheduler.get_last_lr()[0],
-                "best_threshold": best_threshold,
-                "best_threshold_iou": best_threshold_iou,
             }
             # MLflow-Step ebenfalls auf Epoche umstellen, damit UI und Logging
             # dieselbe Zeitskala verwenden.
             mlflow.log_metrics(metrics, step=epoch)
 
-            if best_threshold_iou > best_val_iou:
-                best_val_iou = best_threshold_iou
+            if val_iou_mean > best_val_iou:
+                best_val_iou = val_iou_mean
                 best_epoch = epoch
-                best_threshold_overall = best_threshold
                 torch.save(model.state_dict(), best_model_path)
                 mlflow.set_tag("best_checkpoint", best_model_path.name)
-                best_threshold_path.write_text(json.dumps({"threshold": best_threshold_overall}, indent=2))
+                best_threshold_path.write_text(json.dumps({"threshold": DEFAULT_THRESHOLD}, indent=2))
 
             print(
                 f"epoch {epoch:3d}/{epochs:3d}  "
@@ -1290,8 +1272,6 @@ def train(run_name: str, epochs: int, model_name: str, seed: int):
                 f"train_iou={train_iou_mean:.4f}  "
                 f"val_loss={val_loss_mean:.4f}  "
                 f"val_iou={val_iou_mean:.4f}  "
-                f"best_threshold={best_threshold:.2f}  "
-                f"best_threshold_iou={best_threshold_iou:.4f}  "
                 f"best_val_iou={best_val_iou:.4f}@{best_epoch}"
             )
 
@@ -1321,7 +1301,6 @@ def train(run_name: str, epochs: int, model_name: str, seed: int):
         mlflow.log_metrics({
             "best_val_iou": float(best_val_iou),
             "best_epoch": float(best_epoch),
-            "best_threshold_final": float(best_threshold_overall),
             "epochs_completed": float(epochs),
             "optimizer_steps_completed": float(step),
         }, step=epochs)
@@ -1339,7 +1318,7 @@ def train(run_name: str, epochs: int, model_name: str, seed: int):
             "optimizer_steps_completed": step,
             "best_epoch": best_epoch,
             "best_val_iou": best_val_iou,
-            "best_threshold": best_threshold_overall,
+            "threshold": DEFAULT_THRESHOLD,
             "best_checkpoint": best_model_path.name,
         }, "comparison_manifest.json")
         print(f"\nBest val_iou: {best_val_iou:.4f}")

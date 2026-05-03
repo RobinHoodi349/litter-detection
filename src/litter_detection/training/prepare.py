@@ -30,7 +30,7 @@ from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 from huggingface_hub import snapshot_download
 from tqdm import tqdm
 
@@ -67,6 +67,9 @@ def polygon_to_mask(segmentation: list, width: int, height: int) -> np.ndarray:
         draw.polygon(xy, outline=1, fill=1)
     return np.array(mask, dtype=np.uint8)
 
+def resize_stretch(img, size, is_mask=False):
+    interp = Image.NEAREST if is_mask else Image.BILINEAR
+    return img.resize((size, size), interp)
 
 def main():
     random.seed(RANDOM_SEED)
@@ -131,13 +134,14 @@ def main():
                     with zf.open(name_map[inner_key]) as img_f:
                         img_bytes = img_f.read()
                     img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+                    img = ImageOps.exif_transpose(img).convert("RGB")
                 except Exception as e:
                     tqdm.write(f"  Skipping {inner_path}: {e}")
                     skipped += 1
                     continue
 
                 orig_w, orig_h = img.size
-                img_resized = img.resize((IMAGE_SIZE, IMAGE_SIZE), Image.BILINEAR)
+                img_resized = resize_stretch(img, IMAGE_SIZE, is_mask=False)
 
                 # ── Build binary mask from all annotations ─────────────────
                 combined_mask = np.zeros((orig_h, orig_w), dtype=np.uint8)
@@ -149,7 +153,7 @@ def main():
                     combined_mask = np.maximum(combined_mask, m)
 
                 mask_pil     = Image.fromarray(combined_mask * 255, mode="L")
-                mask_resized = mask_pil.resize((IMAGE_SIZE, IMAGE_SIZE), Image.NEAREST)
+                mask_resized = resize_stretch(mask_pil, IMAGE_SIZE, is_mask=True)
 
                 stem = f"{img_id:06d}"
                 img_resized.save(IMAGES_DIR / f"{stem}.jpg", quality=92)
