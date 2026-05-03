@@ -5,7 +5,7 @@ import time
 
 import cv2
 import zenoh
-from config.config import Settings
+from litter_detection.config import Settings
 
 settings = Settings()
 

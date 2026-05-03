@@ -1,5 +1,5 @@
 from pathlib import Path
-from config.config import Settings
+from litter_detection.config import Settings
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 

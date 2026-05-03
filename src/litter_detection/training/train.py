@@ -64,7 +64,7 @@ FALSE_POSITIVE_THRESHOLD = 0.01
 
 # ── Data ──────────────────────────────────────────────────────────────────────
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 DATA_DIR   = REPO_ROOT / "data"
 IMAGES_DIR = DATA_DIR / "images"
 MASKS_DIR  = DATA_DIR / "masks"
