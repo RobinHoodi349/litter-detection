@@ -10,7 +10,7 @@ import torch
 import zenoh
 
 from litter_detection.config import Settings
-from models import DetectionResult
+from litter_detection.agent.models import DetectionResult
 
 logger = logging.getLogger("litter-detector-agent")
 settings = Settings()

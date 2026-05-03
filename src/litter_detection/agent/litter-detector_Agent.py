@@ -14,10 +14,10 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(AUTO_RESEARCH_DIR))
 
 from litter_detection.config import Settings
-from agent.actions import block_movement, publish_zenoh_alert
-from agent.detector import LitterDetector
-from agent.models import VerifiedDetection
-from agent.verifier import verifier_agent, VerifierDeps
+from litter_detection.agent.actions import block_movement, publish_zenoh_alert
+from litter_detection.agent.detector import LitterDetector
+from litter_detection.agent.models import VerifiedDetection
+from litter_detection.agent.verifier import verifier_agent, VerifierDeps
 
 logging.basicConfig(
     level=logging.INFO,

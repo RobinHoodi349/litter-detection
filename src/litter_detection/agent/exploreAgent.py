@@ -1,3 +1,5 @@
+import threading
+
 from litter_detection.agent.pathPlanerAgent import PathPlannerAgent
 from litter_detection.agent.move_agent import run_move_agent_sync
 from litter_detection.agent.tools.motion_types import MoveAgentDeps
@@ -12,6 +14,9 @@ class ExploreAgent:
         self.active = False
         self.blocked = False
         self.current_waypoint_index = 0
+        # Cleared = paused, Set = free to move
+        self._ready_to_move = threading.Event()
+        self._ready_to_move.set()
 
     def handle_request(self, request):
         request_type = request.get("type")
@@ -96,13 +101,11 @@ class ExploreAgent:
 
     def execute_route(self):
         while self.active and self.current_waypoint_index < len(self.route):
-            if self.blocked:
-                self.stop_move_agent()
-                return {
-                    "status": "blocked",
-                    "agent": "explore_agent",
-                    "current_waypoint_index": self.current_waypoint_index
-                }
+            # Block here until movement is allowed again
+            self._ready_to_move.wait()
+
+            if not self.active:
+                break
 
             waypoint = self.route[self.current_waypoint_index]
 
@@ -131,6 +134,7 @@ class ExploreAgent:
 
     def block_exploration(self, request):
         self.blocked = True
+        self._ready_to_move.clear()
         stop_result = self.stop_move_agent()
 
         return {
@@ -143,19 +147,20 @@ class ExploreAgent:
 
     def unblock_exploration(self):
         self.blocked = False
-
-        if self.active:
-            return self.execute_route()
+        # The explore_route loop is waiting on this event — setting it resumes the thread
+        self._ready_to_move.set()
 
         return {
-            "status": "idle",
+            "status": "resumed",
             "agent": "explore_agent",
-            "message": "No active exploration to resume"
+            "current_waypoint_index": self.current_waypoint_index
         }
 
     def stop_exploration(self):
         self.active = False
         self.blocked = False
+        # Unblock so the thread can observe active=False and exit cleanly
+        self._ready_to_move.set()
         stop_result = self.stop_move_agent()
 
         return {

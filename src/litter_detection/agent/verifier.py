@@ -3,7 +3,7 @@ from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from litter_detection.config import Settings
-from models import VerifiedDetection, VerifierDeps
+from litter_detection.agent.models import VerifiedDetection, VerifierDeps
 
 settings = Settings()
 
