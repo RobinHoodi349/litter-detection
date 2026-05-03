@@ -23,8 +23,7 @@ from pathlib import Path
 import threading
 import time
 
-sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
-from config import Settings
+from litter_detection.config import Settings
 
 settings = Settings()
 # Setup logging

@@ -1,5 +1,5 @@
 [project]
-name = "autoresearcher-litter-detection"
+name = "litter-detection"
 version = "0.1.0"
 description = "Autonomous CNN training for litter segmentation"
 requires-python = ">=3.11"
@@ -37,3 +37,13 @@ explicit = true
 [tool.uv.sources]
 torch = { index = "pytorch" }
 torchvision = { index = "pytorch" }
+
+[build-system]
+requires = ["uv_build>=0.8.4,<0.9.0"]
+build-backend = "uv_build"
+
+[project.scripts]
+cam = "litter_detection.camera.webcam:main"
+interference = "litter_detection.interference.interference:main"
+vis = "litter_detection.visualisation.visualiser:main"
+

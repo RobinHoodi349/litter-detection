@@ -1,6 +1,6 @@
-from pathPlanerAgent import PathPlannerAgent
-from move_agent import run_move_agent_sync
-from src.agent.tools.motion_types import MoveAgentDeps
+from litter_detection.agent.pathPlanerAgent import PathPlannerAgent
+from litter_detection.agent.move_agent import run_move_agent_sync
+from litter_detection.agent.tools.motion_types import MoveAgentDeps
 
 
 class ExploreAgent:

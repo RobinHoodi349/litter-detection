@@ -12,10 +12,10 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from pydantic_ai import Agent
 
-from src.agent.tools.coordinate_tool import move_to_coordinate
-from src.agent.tools.motion_types import MoveAgentDeps
-from src.agent.tools.turn_tool import turn
-from src.agent.tools.walk_tool import stop_movement, walk
+from litter_detection.agent.tools.coordinate_tool import move_to_coordinate
+from litter_detection.agent.tools.motion_types import MoveAgentDeps
+from litter_detection.agent.tools.turn_tool import turn
+from litter_detection.agent.tools.walk_tool import stop_movement, walk
 
 DEFAULT_MOVE_AGENT_MODEL = os.getenv("MOVE_AGENT_MODEL", "test")
 

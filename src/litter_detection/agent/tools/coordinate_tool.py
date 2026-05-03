@@ -9,7 +9,7 @@ from typing import Annotated
 from pydantic import BaseModel, Field
 from pydantic_ai import RunContext
 
-from src.agent.tools.motion_types import (
+from litter_detection.agent.tools.motion_types import (
     AUTONOMOUS_MAX_X_MPS,
     AUTONOMOUS_MAX_Z_DEG_PER_S,
     COMMAND_MAX_AGE_SECONDS,

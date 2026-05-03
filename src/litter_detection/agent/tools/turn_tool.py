@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 from pydantic import Field
 from pydantic_ai import RunContext
 
-from src.agent.tools.motion_types import (
+from litter_detection.agent.tools.motion_types import (
     AUTONOMOUS_MAX_Z_DEG_PER_S,
     MoveAgentDeps,
     MovementCommand,
