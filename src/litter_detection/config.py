@@ -8,7 +8,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 @dataclass
 class Settings:
 # Model
-    MODEL_NAME:str = "models/checkpoints/best_efficientnetb4.pth"
+    MODEL_NAME:str = "models/best_efficientnetb4.pth"
     MODEL_CLASS = EfficientNetB4UNet
     DROPOUT:float = 0.1
     FRAME_MAX_AGE_SECONDS:int = 1
@@ -19,13 +19,22 @@ class Settings:
 
     # Zenoh config
     ZENOH_ROUTER:str =  "tcp/localhost:7447"
-    topic_frame:str = "litter/frame"
+    topic_frame:str = "robodog/sensors/go2_camera"
     topic_mask_binary:str = "litter/mask/binary"
     topic_mask_probabilities:str = "litter/mask/probabilities"
     topic_visualization:str = "litter/visualization"
     topic_alert:str = "litter/alert"
     topic_robodog_command:str = "litter/robodog/command"
-    topic_movement_blocked:str = "robodog/movement/blocked"
+    topic_movement_blocked:str = "litter/movement_blocked"
+    topic_odometry:str = "robodog/system_state/odometry"
+    topic_lidar:str = "robodog/sensors/go2_lidar"
+    topic_movement_command:str = "robodog/command/motion/move"
+
+    # Camera geometry (used by PathPlannerAgent to compute coverage footprint)
+    CAMERA_HEIGHT_M: float = 0.5        # mounting height above ground [m]
+    CAMERA_FOV_H_DEG: float = 90.0     # horizontal field of view [degrees]
+    CAMERA_FOV_V_DEG: float = 60.0     # vertical field of view [degrees]
+    CAMERA_COVERAGE_OVERLAP: float = 0.20  # min. overlap between adjacent footprints
 
     # Vision verifier model (must support image input, e.g. llava, moondream)
     VISION_MODEL_NAME: str = "llava:latest"

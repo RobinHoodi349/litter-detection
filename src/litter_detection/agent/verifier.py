@@ -13,7 +13,7 @@ vision_model = OpenAIChatModel(settings.VISION_MODEL_NAME, provider=provider)
 verifier_agent = Agent(
     vision_model,
     deps_type=VerifierDeps,
-    result_type=VerifiedDetection,
+    output_type=VerifiedDetection,
     system_prompt=(
         "You are a litter detection quality controller for an autonomous robot dog "
         "patrolling an outdoor area. "

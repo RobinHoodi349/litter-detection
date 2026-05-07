@@ -1,22 +1,36 @@
 import threading
 
 from litter_detection.agent.pathPlanerAgent import PathPlannerAgent
-from litter_detection.agent.move_agent import run_move_agent_sync
-from litter_detection.agent.tools.motion_types import MoveAgentDeps
+from litter_detection.agent.navigator import PointNavigator
+from litter_detection.agent.models import MovementCommand, MovementSource
+from litter_detection.agent.tools.motion_types import RobotMotionGateway
+from litter_detection.config import Settings
+
+
+def _build_gateway() -> RobotMotionGateway:
+    cfg = Settings()
+    return RobotMotionGateway(
+        router=cfg.ZENOH_ROUTER,
+        movement_topic=cfg.topic_movement_command,
+        dry_run=False,
+    )
 
 
 class ExploreAgent:
-    def __init__(self, pathplanner=None, move_agent_deps=None):
+    def __init__(self, pathplanner=None, gateway=None):
         self.pathplanner = pathplanner or PathPlannerAgent()
-        self.move_agent_deps = move_agent_deps or MoveAgentDeps.from_env()
+        self.gateway = gateway or _build_gateway()
 
         self.route = []
         self.active = False
         self.blocked = False
         self.current_waypoint_index = 0
+        self._field_size: dict | None = None
         # Cleared = paused, Set = free to move
         self._ready_to_move = threading.Event()
         self._ready_to_move.set()
+        # Set to interrupt a running PointNavigator
+        self._nav_stop = threading.Event()
 
     def handle_request(self, request):
         request_type = request.get("type")
@@ -47,107 +61,95 @@ class ExploreAgent:
                 "message": "Missing field_size"
             }
 
-        if "lane_spacing_m" not in request:
-            return {
-                "status": "error",
-                "agent": "explore_agent",
-                "message": "Missing lane_spacing_m"
-            }
-
         self.active = True
         self.blocked = False
         self.current_waypoint_index = 0
+        self._field_size = request["field_size"]
 
-        path_request = {
-            "type": "PLAN_PATH",
-            "from": "explore_agent",
-            "field_size": request["field_size"],
-            "lane_spacing_m": request["lane_spacing_m"]
-        }
+        return self.execute_frontier_loop()
 
-        path_response = self.pathplanner.handle_request(path_request)
-
-        if path_response.get("status") != "success":
-            self.active = False
-            return {
-                "status": "error",
-                "agent": "explore_agent",
-                "message": path_response.get("message", "Path planning failed")
-            }
-
-        self.route = path_response["waypoints"]
-
-        print(
-            f"ExploreAgent: received {len(self.route)} waypoints "
-            f"from PathPlannerAgent"
+    def move_to_waypoint(self, waypoint) -> bool:
+        self._nav_stop.clear()
+        nav = PointNavigator(
+            target_x=waypoint["x"],
+            target_y=waypoint["y"],
+            gateway=self.gateway,
         )
+        return nav.run(stop_event=self._nav_stop)
 
-        return self.execute_route()
+    def stop_robot(self) -> None:
+        self.gateway.publish_movement(MovementCommand(source=MovementSource.autonomous))
 
-    def move_to_waypoint(self, waypoint):
-        prompt = (
-            "Fahre zur Zielkoordinate.\n"
-            f"Waypoint-ID: {waypoint.get('id')}\n"
-            f"x: {waypoint['x']}\n"
-            f"y: {waypoint['y']}\n"
-            "Quelle: explore_agent"
-        )
-
-        return run_move_agent_sync(prompt, deps=self.move_agent_deps)
-
-    def stop_move_agent(self):
-        prompt = "Stoppe sofort jede Bewegung. Quelle: explore_agent"
-        return run_move_agent_sync(prompt, deps=self.move_agent_deps)
-
-    def execute_route(self):
-        while self.active and self.current_waypoint_index < len(self.route):
-            # Block here until movement is allowed again
+    def execute_frontier_loop(self):
+        """Repeatedly fetch the next frontier and navigate to it until the field is covered."""
+        while self.active:
+            # Wait if movement is currently blocked
             self._ready_to_move.wait()
 
             if not self.active:
                 break
 
-            waypoint = self.route[self.current_waypoint_index]
+            result = self.pathplanner.handle_request({
+                "type": "NEXT_FRONTIER",
+                "from": "explore_agent",
+                "field_size": self._field_size,
+            })
 
-            move_result = self.move_to_waypoint(waypoint)
+            if result.get("status") == "completed":
+                print("ExploreAgent: full area explored.")
+                break
 
-            print(f"ExploreAgent: MoveAgent result for {waypoint['id']}: {move_result}")
+            if result.get("status") != "success":
+                print(f"ExploreAgent: planner error — {result.get('message')}")
+                break
 
-            if move_result is None or "error" in str(move_result).lower():
-                self.active = False
-                return {
-                    "status": "error",
-                    "agent": "explore_agent",
-                    "message": f"MoveAgent failed at waypoint {waypoint['id']}",
-                    "move_agent_result": str(move_result)
-                }
+            self.route = result.get("waypoints", [])
 
-            self.current_waypoint_index += 1
+            # Navigate through all A* waypoints leading to the frontier
+            for waypoint in self.route:
+                if not self.active:
+                    break
+
+                self._ready_to_move.wait()
+                if not self.active:
+                    break
+
+                reached = self.move_to_waypoint(waypoint)
+                print(f"ExploreAgent: waypoint {waypoint['id']} reached={reached}")
+
+                if not reached and self.active:
+                    # Interrupted mid-route (BLOCK); outer loop will re-plan
+                    break
+
+                if not reached:
+                    self.active = False
+                    break
+
+                self.current_waypoint_index += 1
 
         self.active = False
 
         return {
             "status": "completed",
             "agent": "explore_agent",
-            "executed_waypoints": self.current_waypoint_index
+            "executed_waypoints": self.current_waypoint_index,
         }
 
     def block_exploration(self, request):
         self.blocked = True
         self._ready_to_move.clear()
-        stop_result = self.stop_move_agent()
+        self._nav_stop.set()
+        self.stop_robot()
 
         return {
             "status": "blocked",
             "agent": "explore_agent",
             "reason": request.get("reason", "unknown"),
-            "current_waypoint_index": self.current_waypoint_index,
-            "move_agent_result": str(stop_result)
+            "current_waypoint_index": self.current_waypoint_index
         }
 
     def unblock_exploration(self):
         self.blocked = False
-        # The explore_route loop is waiting on this event — setting it resumes the thread
         self._ready_to_move.set()
 
         return {
@@ -159,14 +161,13 @@ class ExploreAgent:
     def stop_exploration(self):
         self.active = False
         self.blocked = False
-        # Unblock so the thread can observe active=False and exit cleanly
+        self._nav_stop.set()
         self._ready_to_move.set()
-        stop_result = self.stop_move_agent()
+        self.stop_robot()
 
         return {
             "status": "stopped",
             "agent": "explore_agent",
-            "move_agent_result": str(stop_result)
         }
 
 
@@ -180,7 +181,6 @@ if __name__ == "__main__":
             "width_m": 5.0,
             "height_m": 5.0
         },
-        "lane_spacing_m": 0.5
     }
 
     response = explore_agent.handle_request(coordination_agent_request)
