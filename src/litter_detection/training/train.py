@@ -31,44 +31,76 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 from PIL import Image
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 import torchvision.models as tv_models
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
+from scipy.ndimage import label as scipy_label
 
 # ── Hyperparameters (edit freely) ─────────────────────────────────────────────
 
 DEFAULT_EPOCHS   = 50
 DEFAULT_SEED     = 42
 BATCH_SIZE       = 8
-CROP_SIZE        = 256        # random-crop spatial resolution during training
+CROP_SIZE        = 384        # random-crop spatial resolution during training
 LR               = 8e-4
-WEIGHT_DECAY     = 1e-3
+WEIGHT_DECAY     = 3e-3
 ENCODER_CHANNELS = [64, 128, 256, 512]   # U-Net encoder stage widths
 DECODER_CHANNELS = [256, 128, 64, 32]    # U-Net decoder stage widths
-DROPOUT          = 0.25
+DROPOUT          = 0.35
 POS_WEIGHT       = 3.0        # BCEWithLogitsLoss pos_weight (handles class imbalance)
 USE_GROUND_ROI   = False
 GROUND_ROI_TOP   = 0.4
 DEFAULT_THRESHOLD = 0.7
 
-USE_POSTPROCESSING = True
-MIN_COMPONENT_SIZE = 200
-USE_ERROR_ANALYSIS = True
+USE_POSTPROCESSING = False
+MIN_COMPONENT_SIZE = 50
+USE_ERROR_ANALYSIS = False
 ERROR_ANALYSIS_DIR = "error_analysis"
 MAX_ERROR_SAMPLES_PER_EPOCH = 5
 FALSE_POSITIVE_THRESHOLD = 0.01
                                # override with value from data/meta.json
+ACCUM_STEPS     = 1           # gradient accumulation (effective batch = BATCH_SIZE * ACCUM_STEPS)
+LABEL_SMOOTHING = 0.05        # raised from 0.01 — TACO polygon boundaries are imprecise
+
+# ── Layer-wise LR Decay multipliers per backbone stage ────────────────────────
+_EFFICIENTNET_STAGE_LLRD: dict[str, float] = {
+    'stage0': 0.05, 'stage1': 0.05,
+    'stage2': 0.05, 'stage3': 0.05,
+    'stage4': 0.10, 'stage5': 0.10,
+    'stage6': 0.10, 'stage7': 0.10,
+}
+_RESNET_STAGE_LLRD: dict[str, float] = {
+    'stem_conv': 0.05, 'stem_pool': 0.05,
+    'layer1': 0.05,    'layer2': 0.05,
+    'layer3': 0.10,    'layer4': 0.10,
+}
+
+# ── Gradual Unfreezing Schedule ───────────────────────────────────────────────
+# Each tuple: (start_epoch, frozenset of stage prefixes unlocked at that epoch).
+# Active stages at epoch E = union of all sets where start_epoch <= E.
+_EFFICIENTNET_UNFREEZE_SCHEDULE: list[tuple[int, frozenset]] = [
+    (1,   frozenset()),
+    (4,   frozenset({'stage7', 'stage6'})),
+    (7,   frozenset({'stage5', 'stage4'})),
+    (10,  frozenset({'stage3', 'stage2', 'stage1', 'stage0'})),
+]
+_RESNET_UNFREEZE_SCHEDULE: list[tuple[int, frozenset]] = [
+    (1,   frozenset()),
+    (4,   frozenset({'layer4'})),
+    (7,   frozenset({'layer3', 'layer2'})),
+    (10,  frozenset({'layer1', 'stem_conv', 'stem_pool'})),
+]
 
 # ── Data ──────────────────────────────────────────────────────────────────────
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR   = REPO_ROOT / "data"
 IMAGES_DIR = DATA_DIR / "images"
 MASKS_DIR  = DATA_DIR / "masks"
-ARTIFACTS_DIR = REPO_ROOT / "artifacts" / "mlflow"
+ARTIFACTS_DIR = REPO_ROOT / "models" / "artifacts" / "mlflow"
 MODELS_DIR = REPO_ROOT / "models" / "checkpoints"
 MLFLOW_DB = ARTIFACTS_DIR / "mlflow.db"
 MLFLOW_ARTIFACTS_DIR = ARTIFACTS_DIR / "mlruns"
@@ -130,11 +162,27 @@ class LitterDataset(Dataset):
                               border_mode=0, value=0, mask_value=0),
                 A.RandomCrop(height=crop_size, width=crop_size),
                 A.HorizontalFlip(p=0.5),
+                A.VerticalFlip(p=0.3),
                 A.RandomRotate90(p=0.3),
+                A.Perspective(scale=(0.02, 0.08), p=0.3),
+                A.ElasticTransform(p=0.2),
+                A.CoarseDropout(max_holes=8, max_height=32, max_width=32,
+                                fill_value=0, p=0.3),
             ], additional_targets={"mask": "mask"})
             self.image_transforms = A.Compose([
-                A.ColorJitter(brightness=0.2, contrast=0.2,
-                              saturation=0.2, hue=0.05, p=0.5),
+                A.ColorJitter(brightness=0.3, contrast=0.3,
+                              saturation=0.3, hue=0.1, p=0.7),
+                A.OneOf([
+                    A.MotionBlur(p=1.0),
+                    A.GaussianBlur(p=1.0),
+                    A.MedianBlur(blur_limit=5, p=1.0),
+                ], p=0.3),
+                A.OneOf([
+                    A.RandomShadow(p=1.0),
+                    A.RandomFog(fog_coef_lower=0.1, fog_coef_upper=0.25, p=1.0),
+                    A.RandomSunFlare(flare_roi=(0, 0, 1, 0.5), p=1.0),
+                ], p=0.25),
+                A.CLAHE(p=0.3),
                 A.GaussNoise(p=0.1),
                 A.Normalize(mean=(0.485, 0.456, 0.406),
                             std=(0.229, 0.224, 0.225)),
@@ -170,6 +218,16 @@ class LitterDataset(Dataset):
 
         out = self.image_transforms(image=image)
         return out["image"], torch.from_numpy(mask).unsqueeze(0)
+
+    def compute_sample_weights(self) -> list[float]:
+        """Per-sample weights for WeightedRandomSampler: higher litter fraction → higher weight."""
+        print(f"Computing sample weights for {len(self.stems)} training images …")
+        weights = []
+        for stem in self.stems:
+            mask = np.array(Image.open(MASKS_DIR / f"{stem}.png"))
+            frac = float((mask > 127).mean())
+            weights.append(frac + 0.05)  # floor at 0.05 so all images stay in the pool
+        return weights
 
 
 # ── Model ─────────────────────────────────────────────────────────────────────
@@ -208,6 +266,24 @@ class SEBlock(nn.Module):
     def forward(self, x):
         scale = self.se(x).view(x.size(0), x.size(1), 1, 1)
         return x * scale
+
+
+class AttentionGate(nn.Module):
+    """Spatial attention gate: suppresses irrelevant skip-connection features."""
+    def __init__(self, g_ch: int, x_ch: int, inter_ch: int):
+        super().__init__()
+        self.W_g  = nn.Conv2d(g_ch, inter_ch, 1, bias=False)
+        self.W_x  = nn.Conv2d(x_ch, inter_ch, 1, bias=False)
+        self.psi  = nn.Sequential(
+            nn.Conv2d(inter_ch, 1, 1, bias=False),
+            nn.BatchNorm2d(1),
+            nn.Sigmoid(),
+        )
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, g: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+        """g: gating signal (from upsampled path), x: skip connection to gate."""
+        return x * self.psi(self.relu(self.W_g(g) + self.W_x(x)))
 
 
 class ASPPModule(nn.Module):
@@ -731,7 +807,8 @@ class EfficientNetB1UNet(nn.Module):
                 m.weight.requires_grad_(False)
                 m.bias.requires_grad_(False)
 
-        self.up1 = nn.ConvTranspose2d(320, 112, 2, 2)
+        self.aspp = ASPPModule(320, 256)
+        self.up1 = nn.ConvTranspose2d(256, 112, 2, 2)
         self.dec1 = ConvBlock(112 + 112, 256, dropout)
 
         self.up2 = nn.ConvTranspose2d(256, 128, 2, 2)
@@ -746,6 +823,16 @@ class EfficientNetB1UNet(nn.Module):
         self.final_up = nn.ConvTranspose2d(32, 16, 2, 2)
         self.final_conv = ConvBlock(16, 16, dropout)
         self.head = nn.Conv2d(16, 1, 1)
+
+        # g_ch = upsampled channels, x_ch = skip channels (see stage sizes above)
+        self.att1 = AttentionGate(g_ch=112, x_ch=112, inter_ch=64)
+        self.att2 = AttentionGate(g_ch=128, x_ch=40,  inter_ch=32)
+        self.att3 = AttentionGate(g_ch=64,  x_ch=24,  inter_ch=16)
+        self.att4 = AttentionGate(g_ch=32,  x_ch=16,  inter_ch=8)
+
+        # Deep supervision: auxiliary heads at dec1 (H/16) and dec2 (H/8)
+        self.aux_head1 = nn.Conv2d(256, 1, 1)
+        self.aux_head2 = nn.Conv2d(128, 1, 1)
 
     def _align(self, x, ref):
         if x.shape[2:] != ref.shape[2:]:
@@ -762,51 +849,63 @@ class EfficientNetB1UNet(nn.Module):
         s6 = self.stage6(s5)
         s7 = self.stage7(s6)
 
+        s7 = self.aspp(s7)
         d = self.up1(s7)
         d = self._align(d, s5)
-        d = self.dec1(torch.cat([d, s5], dim=1))
+        d = self.dec1(torch.cat([d, self.att1(d, s5)], dim=1))
+        d1 = d  # H/16, 256 ch — deep supervision anchor
 
         d = self.up2(d)
         d = self._align(d, s3)
-        d = self.dec2(torch.cat([d, s3], dim=1))
+        d = self.dec2(torch.cat([d, self.att2(d, s3)], dim=1))
+        d2 = d  # H/8, 128 ch — deep supervision anchor
 
         d = self.up3(d)
         d = self._align(d, s2)
-        d = self.dec3(torch.cat([d, s2], dim=1))
+        d = self.dec3(torch.cat([d, self.att3(d, s2)], dim=1))
 
         d = self.up4(d)
         d = self._align(d, s1)
-        d = self.dec4(torch.cat([d, s1], dim=1))
+        d = self.dec4(torch.cat([d, self.att4(d, s1)], dim=1))
 
         d = self.final_up(d)
         d = self.final_conv(d)
-        return self.head(d)
+        main = self.head(d)
+
+        if self.training:
+            return main, self.aux_head1(d1), self.aux_head2(d2)
+        return main
 
 
 # ── Loss ──────────────────────────────────────────────────────────────────────
 
 class CombinedLoss(nn.Module):
-    """BCE + Dice loss (equal weight) with label smoothing."""
-    def __init__(self, pos_weight: float = POS_WEIGHT, label_smoothing: float = 0.01):
+    """BCE (pixel-level imbalance) + Focal Tversky (region-level FN emphasis)."""
+    def __init__(self, pos_weight: float = POS_WEIGHT, label_smoothing: float = LABEL_SMOOTHING):
         super().__init__()
         self.bce = nn.BCEWithLogitsLoss(
             pos_weight=torch.tensor([pos_weight])
         )
         self.label_smoothing = label_smoothing
 
-    def dice_loss(self, logits, targets, smooth: float = 1.0):
+    def focal_tversky_loss(self, logits, targets,
+                           alpha: float = 0.3, beta: float = 0.7,
+                           gamma: float = 0.75, smooth: float = 1.0):
+        # alpha weights FP, beta weights FN — beta > alpha penalises missed litter more
         probs = torch.sigmoid(logits)
-        num   = 2 * (probs * targets).sum() + smooth
-        den   = probs.sum() + targets.sum() + smooth
-        return 1 - num / den
+        tp = (probs * targets).sum()
+        fp = (probs * (1 - targets)).sum()
+        fn = ((1 - probs) * targets).sum()
+        tversky = (tp + smooth) / (tp + alpha * fp + beta * fn + smooth)
+        return (1 - tversky) ** (1.0 / gamma)
 
     def forward(self, logits, targets):
-        # Apply label smoothing: shift targets away from 0 and 1
         if self.label_smoothing > 0:
             targets_smooth = targets * (1.0 - self.label_smoothing) + 0.5 * self.label_smoothing
         else:
             targets_smooth = targets
-        return self.bce(logits, targets_smooth) + self.dice_loss(logits, targets_smooth)
+        return (self.bce(logits, targets_smooth)
+                + self.focal_tversky_loss(logits, targets_smooth))
 
 
 # ── Metrics ───────────────────────────────────────────────────────────────────
@@ -845,35 +944,11 @@ def _iou_from_probs(
 def remove_small_components(preds: torch.Tensor, min_size: int) -> torch.Tensor:
     preds_np = preds.cpu().numpy().astype(np.uint8)
     cleaned = np.zeros_like(preds_np)
-
     for b in range(preds_np.shape[0]):
-        mask = preds_np[b, 0]
-        visited = np.zeros_like(mask, dtype=bool)
-        h, w = mask.shape
-
-        for y in range(h):
-            for x in range(w):
-                if mask[y, x] == 0 or visited[y, x]:
-                    continue
-
-                stack = [(y, x)]
-                component = []
-                visited[y, x] = True
-
-                while stack:
-                    cy, cx = stack.pop()
-                    component.append((cy, cx))
-
-                    for ny, nx in ((cy - 1, cx), (cy + 1, cx), (cy, cx - 1), (cy, cx + 1)):
-                        if 0 <= ny < h and 0 <= nx < w:
-                            if mask[ny, nx] == 1 and not visited[ny, nx]:
-                                visited[ny, nx] = True
-                                stack.append((ny, nx))
-
-                if len(component) >= min_size:
-                    for cy, cx in component:
-                        cleaned[b, 0, cy, cx] = 1
-
+        labeled, _ = scipy_label(preds_np[b, 0])
+        for comp_id in np.unique(labeled)[1:]:
+            if (labeled == comp_id).sum() >= min_size:
+                cleaned[b, 0] |= (labeled == comp_id).astype(np.uint8)
     return torch.from_numpy(cleaned).to(preds.device).float()
 
 
@@ -1041,6 +1116,33 @@ def get_model_names(selection: str) -> list[str]:
     return [selection]
 
 
+def build_param_groups(
+    model: nn.Module, base_lr: float
+) -> tuple[list[dict], list[float]]:
+    """Build AdamW parameter groups with fine-grained LLRD for each backbone stage."""
+    all_llrd = {**_EFFICIENTNET_STAGE_LLRD, **_RESNET_STAGE_LLRD}
+    groups: dict[str, list] = {}
+    decoder_params: list = []
+    for name, param in model.named_parameters():
+        matched = next((pfx for pfx in all_llrd if name.startswith(pfx)), None)
+        if matched:
+            groups.setdefault(matched, []).append(param)
+        else:
+            decoder_params.append(param)
+    param_groups: list[dict] = []
+    max_lrs: list[float] = []
+    for prefix, params in groups.items():
+        lr = base_lr * all_llrd[prefix]
+        param_groups.append({"params": params, "lr": lr})
+        max_lrs.append(lr)
+    if decoder_params:
+        param_groups.append({"params": decoder_params, "lr": base_lr})
+        max_lrs.append(base_lr)
+    if not param_groups:
+        return [{"params": list(model.parameters()), "lr": base_lr}], [base_lr]
+    return param_groups, max_lrs
+
+
 def train(run_name: str, epochs: int, model_name: str, seed: int):
     if epochs < 1:
         raise ValueError("epochs must be >= 1")
@@ -1059,10 +1161,16 @@ def train(run_name: str, epochs: int, model_name: str, seed: int):
     # ── Data ──────────────────────────────────────────────────────────────
     train_ds = LitterDataset("train", crop_size=CROP_SIZE, augment=True)
     val_ds   = LitterDataset("val",   crop_size=CROP_SIZE, augment=False)
+    sample_weights = train_ds.compute_sample_weights()
+    sampler = WeightedRandomSampler(
+        weights=sample_weights,
+        num_samples=len(sample_weights),
+        replacement=True,
+        generator=torch.Generator().manual_seed(seed),
+    )
     train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE,
-                              shuffle=True,  num_workers=4, pin_memory=True,
-                              persistent_workers=True, worker_init_fn=seed_worker,
-                              generator=loader_generator)
+                              sampler=sampler, num_workers=4, pin_memory=True,
+                              persistent_workers=True, worker_init_fn=seed_worker)
     val_loader   = DataLoader(val_ds,   batch_size=BATCH_SIZE,
                               shuffle=False, num_workers=2, pin_memory=True,
                               persistent_workers=True, worker_init_fn=seed_worker,
@@ -1078,20 +1186,21 @@ def train(run_name: str, epochs: int, model_name: str, seed: int):
     print(f"Model: {model_name}")
     print(f"Model parameters: {total_params:,}")
 
-    # ── Optimizer + Schedule ──────────────────────────────────────────────
-    optimizer = torch.optim.AdamW(model.parameters(), lr=LR,
-                                  weight_decay=WEIGHT_DECAY)
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+    # ── Optimizer + Schedule (fine-grained LLRD) ──────────────────────────
+    param_groups, _ = build_param_groups(model, LR)
+    optimizer = torch.optim.AdamW(param_groups, weight_decay=WEIGHT_DECAY)
+    effective_steps_per_epoch = max(1, len(train_loader) // ACCUM_STEPS)
+    # Single full-length cosine cycle — no mid-training LR restarts that would
+    # destabilize a model that has already found a good val optimum.
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer,
-        max_lr=LR,
-        steps_per_epoch=len(train_loader),
-        epochs=epochs,
-        pct_start=0.15,
-        anneal_strategy="cos",
+        T_0=epochs,
+        T_mult=1,
+        eta_min=1e-6,
     )
     criterion = CombinedLoss(pos_weight=pos_weight).to(device)
     amp_enabled = device.type == "cuda"
-    scaler = GradScaler(enabled=amp_enabled)
+    scaler = GradScaler('cuda', enabled=amp_enabled)
 
     # ── MLflow ────────────────────────────────────────────────────────────
     configure_local_mlflow()
@@ -1108,7 +1217,7 @@ def train(run_name: str, epochs: int, model_name: str, seed: int):
         active_run = mlflow.active_run()
         assert active_run is not None
         run_id = active_run.info.run_id
-        steps_per_epoch = len(train_loader)
+        steps_per_epoch = effective_steps_per_epoch
         optimizer_steps_target = epochs * steps_per_epoch
 
         mlflow.log_params({
@@ -1122,8 +1231,9 @@ def train(run_name: str, epochs: int, model_name: str, seed: int):
             "dropout":           DROPOUT,
             "pos_weight":        pos_weight,
             "optimizer":         "AdamW",
-            "scheduler":         "OneCycleLR",
-            "loss":              "BCE+Dice",
+            "scheduler":         "CosineAnnealingWarmRestarts",
+            "loss":              "BCE+FocalTversky",
+            "label_smoothing":   LABEL_SMOOTHING,
             "total_params":      total_params,
             "device":            str(device),
             "epochs_target":     epochs,
@@ -1140,6 +1250,9 @@ def train(run_name: str, epochs: int, model_name: str, seed: int):
             "use_error_analysis": USE_ERROR_ANALYSIS,
             "max_error_samples_per_epoch": MAX_ERROR_SAMPLES_PER_EPOCH,
             "false_positive_threshold": FALSE_POSITIVE_THRESHOLD,
+            "accum_steps":        ACCUM_STEPS,
+            "llrd_groups":        len(param_groups),
+            "unfreeze_schedule":  "gradual_5stage",
         })
         mlflow.set_tags({
             "comparison_basis": "fixed_epochs",
@@ -1153,36 +1266,79 @@ def train(run_name: str, epochs: int, model_name: str, seed: int):
         best_val_iou = 0.0
         best_epoch = 0
         best_model_path = MODELS_DIR / f"best_model_{model_name}_{run_id}.pth"
-        best_threshold_path = MODELS_DIR / f"best_threshold_{model_name}_{run_id}.json"
         error_analysis_dir = REPO_ROOT / ERROR_ANALYSIS_DIR
         if USE_ERROR_ANALYSIS:
             error_analysis_dir.mkdir(parents=True, exist_ok=True)
         t0 = time.time()
         step = 0
 
+        # ── Gradual unfreezing state ───────────────────────────────────────
+        _all_backbone_prefixes = set(_EFFICIENTNET_STAGE_LLRD) | set(_RESNET_STAGE_LLRD)
+        _model_backbone_prefixes = {
+            pfx for pfx in _all_backbone_prefixes
+            if any(n.startswith(pfx) for n, _ in model.named_parameters())
+        }
+        _unfreeze_schedule = (
+            _EFFICIENTNET_UNFREEZE_SCHEDULE
+            if any(n.startswith('stage') for n, _ in model.named_parameters())
+            else _RESNET_UNFREEZE_SCHEDULE
+        )
+        # Precompute param → backbone prefix mapping for fast per-batch lookup
+        _param_to_prefix: dict[str, str | None] = {
+            name: next((p for p in _model_backbone_prefixes if name.startswith(p)), None)
+            for name, _ in model.named_parameters()
+        }
+
         # Die Schleife ist jetzt explizit epochenbasiert statt indirekt über
         # einen Abbruch mitten in einer while-Schleife.
         for epoch in range(1, epochs + 1):
+            # Determine frozen backbone stages for this epoch
+            _active: set[str] = set()
+            for start_ep, stages in _unfreeze_schedule:
+                if epoch >= start_ep:
+                    _active |= stages
+            _frozen = _model_backbone_prefixes - _active
+
             model.train()
             train_loss = 0.0
             train_iou  = 0.0
+            optimizer.zero_grad(set_to_none=True)
 
-            for images, masks in train_loader:
+            for batch_idx, (images, masks) in enumerate(train_loader):
                 images = images.to(device, non_blocking=True)
                 masks  = masks.to(device,  non_blocking=True)
 
-                optimizer.zero_grad(set_to_none=True)
-                with autocast(enabled=amp_enabled):
-                    logits = model(images)
-                    loss   = criterion(logits, masks)
+                with autocast('cuda', enabled=amp_enabled):
+                    output = model(images)
+                    if isinstance(output, tuple):
+                        logits, aux1, aux2 = output
+                        aux1 = F.interpolate(aux1, size=masks.shape[2:], mode='bilinear', align_corners=False)
+                        aux2 = F.interpolate(aux2, size=masks.shape[2:], mode='bilinear', align_corners=False)
+                        loss = (criterion(logits, masks)
+                                + 0.4 * criterion(aux1, masks)
+                                + 0.2 * criterion(aux2, masks)) / ACCUM_STEPS
+                    else:
+                        logits = output
+                        loss   = criterion(logits, masks) / ACCUM_STEPS
                 scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)
-                nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                scaler.step(optimizer)
-                scaler.update()
-                scheduler.step()
 
-                train_loss += loss.item()
+                # Gradual backbone unfreezing: zero gradients for frozen stages
+                if _frozen:
+                    for name, param in model.named_parameters():
+                        if param.grad is not None and _param_to_prefix.get(name) in _frozen:
+                            param.grad.zero_()
+
+                is_last_batch = (batch_idx + 1) == len(train_loader)
+                if (batch_idx + 1) % ACCUM_STEPS == 0 or is_last_batch:
+                    scaler.unscale_(optimizer)
+                    nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    scaler.step(optimizer)
+                    scaler.update()
+                    scheduler.step(epoch - 1 + (batch_idx + 1) / len(train_loader))
+                    optimizer.zero_grad(set_to_none=True)
+                    step += 1
+
+                train_loss += loss.item() * ACCUM_STEPS
                 train_iou  += compute_iou(
                     logits,
                     masks,
@@ -1190,12 +1346,13 @@ def train(run_name: str, epochs: int, model_name: str, seed: int):
                     use_postprocessing=USE_POSTPROCESSING,
                     min_component_size=MIN_COMPONENT_SIZE,
                 )
-                step += 1
 
             # ── Validation ────────────────────────────────────────────
             model.eval()
             val_loss = 0.0
-            val_iou_accum = 0.0
+            val_tp = 0.0
+            val_fp = 0.0
+            val_fn = 0.0
             error_candidates = []
             with torch.no_grad():
                 for images, masks in val_loader:
@@ -1203,12 +1360,11 @@ def train(run_name: str, epochs: int, model_name: str, seed: int):
                     masks  = masks.to(device,  non_blocking=True)
                     logits = model(images)
                     probs = torch.sigmoid(logits)
+                    preds = (probs > DEFAULT_THRESHOLD).float()
+                    if USE_POSTPROCESSING:
+                        preds = remove_small_components(preds, MIN_COMPONENT_SIZE)
 
                     if USE_ERROR_ANALYSIS:
-                        preds = (probs > DEFAULT_THRESHOLD).float()
-                        if USE_POSTPROCESSING:
-                            preds = remove_small_components(preds, MIN_COMPONENT_SIZE)
-
                         for b in range(images.size(0)):
                             pred_area = preds[b].sum().item()
                             gt_area = masks[b].sum().item()
@@ -1230,20 +1386,16 @@ def train(run_name: str, epochs: int, model_name: str, seed: int):
                                 ))
 
                     val_loss += criterion(logits, masks).item()
-                    val_iou_accum += _iou_from_probs(
-                        probs,
-                        masks,
-                        DEFAULT_THRESHOLD,
-                        USE_POSTPROCESSING,
-                        MIN_COMPONENT_SIZE,
-                    )
+                    val_tp += (preds * masks).sum().item()
+                    val_fp += (preds * (1 - masks)).sum().item()
+                    val_fn += ((1 - preds) * masks).sum().item()
 
             n_train = len(train_loader)
             n_val   = len(val_loader)
             train_loss_mean = train_loss / max(n_train, 1)
             train_iou_mean = train_iou / max(n_train, 1)
             val_loss_mean = val_loss / max(n_val, 1)
-            val_iou_mean = val_iou_accum / max(n_val, 1)
+            val_iou_mean = val_tp / max(val_tp + val_fp + val_fn, 1.0)
             elapsed = time.time() - t0
 
             metrics = {
@@ -1253,18 +1405,15 @@ def train(run_name: str, epochs: int, model_name: str, seed: int):
                 "val_iou":    val_iou_mean,
                 "epoch":      epoch,
                 "elapsed_s":  elapsed,
-                "lr":         scheduler.get_last_lr()[0],
+                "lr":         scheduler.get_last_lr()[-1],
             }
-            # MLflow-Step ebenfalls auf Epoche umstellen, damit UI und Logging
-            # dieselbe Zeitskala verwenden.
-            mlflow.log_metrics(metrics, step=epoch)
+            mlflow.log_metrics(metrics, step=step)
 
             if val_iou_mean > best_val_iou:
                 best_val_iou = val_iou_mean
                 best_epoch = epoch
                 torch.save(model.state_dict(), best_model_path)
                 mlflow.set_tag("best_checkpoint", best_model_path.name)
-                best_threshold_path.write_text(json.dumps({"threshold": DEFAULT_THRESHOLD}, indent=2))
 
             print(
                 f"epoch {epoch:3d}/{epochs:3d}  "
@@ -1295,15 +1444,13 @@ def train(run_name: str, epochs: int, model_name: str, seed: int):
 
         if best_model_path.exists():
             mlflow.log_artifact(str(best_model_path), artifact_path="checkpoints")
-        if best_threshold_path.exists():
-            mlflow.log_artifact(str(best_threshold_path), artifact_path="checkpoints")
 
         mlflow.log_metrics({
             "best_val_iou": float(best_val_iou),
             "best_epoch": float(best_epoch),
             "epochs_completed": float(epochs),
             "optimizer_steps_completed": float(step),
-        }, step=epochs)
+        }, step=step)
         mlflow.log_dict({
             "run_id": run_id,
             "run_name": run_name,

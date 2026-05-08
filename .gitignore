@@ -2,7 +2,7 @@
 __pycache__/
 *.pyc
 data/
-artifacts/mlflow/mlruns/
+artifacts/mlflow/mlruns/*
 auto-research/findings.md
 .DS_Store
 uv.lock
