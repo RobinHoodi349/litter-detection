@@ -47,4 +47,4 @@ build-backend = "uv_build"
 cam = "litter_detection.camera.webcam:main"
 interference = "litter_detection.interference.interference:main"
 vis = "litter_detection.visualisation.visualiser:main"
-
+litter-detection = "litter_detection.agent.coordinator:main"

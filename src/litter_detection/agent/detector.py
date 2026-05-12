@@ -15,7 +15,7 @@ from litter_detection.agent.models import DetectionResult
 logger = logging.getLogger("litter-detector-agent")
 settings = Settings()
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
 class LitterDetector:
