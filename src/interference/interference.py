@@ -6,7 +6,7 @@ AUTO_RESEARCH_DIR = PROJECT_ROOT / "auto-research"
 sys.path.insert(0, str(SRC_ROOT))
 sys.path.insert(0, str(AUTO_RESEARCH_DIR))
 
-from config import Settings
+from src.config.config import Settings
 from train import *
 
 import zenoh
