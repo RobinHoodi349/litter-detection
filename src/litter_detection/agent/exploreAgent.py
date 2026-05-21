@@ -9,6 +9,8 @@ from litter_detection.agent.models import MovementCommand, MovementSource
 from litter_detection.agent.tools.motion_types import RobotMotionGateway
 from litter_detection.config import Settings
 
+WAYPOINT_TIMEOUT_S = 30.0  # seconds before giving up on a single waypoint and re-planning
+
 
 def _build_gateway() -> RobotMotionGateway:
     cfg = Settings()
@@ -71,14 +73,14 @@ class ExploreAgent:
 
         return self.execute_frontier_loop()
 
-    def move_to_waypoint(self, waypoint) -> bool:
+    def move_to_waypoint(self, waypoint, timeout_s: float = WAYPOINT_TIMEOUT_S) -> bool:
         self._nav_stop.clear()
         nav = PointNavigator(
             target_x=waypoint["x"],
             target_y=waypoint["y"],
             gateway=self.gateway,
         )
-        return nav.run(stop_event=self._nav_stop)
+        return nav.run(stop_event=self._nav_stop, timeout_s=timeout_s)
 
     def stop_robot(self) -> None:
         self.gateway.publish_movement(MovementCommand(source=MovementSource.autonomous))
@@ -109,7 +111,7 @@ class ExploreAgent:
             self.route = result.get("waypoints", [])
 
             # Navigate through all A* waypoints leading to the frontier
-            for waypoint in self.route:
+            for wp_idx, waypoint in enumerate(self.route):
                 if not self.active:
                     break
 
@@ -121,7 +123,7 @@ class ExploreAgent:
                 logger.info("ExploreAgent: waypoint %s reached=%s", waypoint["id"], reached)
 
                 if not reached and self.active:
-                    # Interrupted mid-route (BLOCK); outer loop will re-plan
+                    # Timeout or BLOCK — outer loop will re-plan with latest LiDAR data
                     break
 
                 if not reached:
@@ -129,6 +131,15 @@ class ExploreAgent:
                     break
 
                 self.current_waypoint_index += 1
+
+                # After each step, verify remaining waypoints are still obstacle-free.
+                # New LiDAR data may have revealed obstacles on the planned path.
+                remaining = self.route[wp_idx + 1:]
+                if remaining and not self.pathplanner.is_path_valid(remaining):
+                    logger.info(
+                        "ExploreAgent: remaining path blocked by new LiDAR data — re-planning"
+                    )
+                    break
 
         self.active = False
 

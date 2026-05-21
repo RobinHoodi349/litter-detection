@@ -33,6 +33,7 @@ OBSTACLE_Z_MAX_M = 0.80   # points above this are overhead clearance (free)
 GRID_CELL_SIZE_M = 0.20   # occupancy/frontier grid resolution
 INFLATE_CELLS = 2          # obstacle inflation radius in cells (~0.4 m safety margin)
 LIDAR_WARMUP_S = 2.0       # max seconds to wait for first LiDAR scan before planning
+FRONTIER_SIZE_WEIGHT = 3.0 # scales cluster-size bonus in the frontier cost function
 
 _NEIGHBORS_4 = [(-1, 0), (1, 0), (0, -1), (0, 1)]
 _NEIGHBORS_8 = _NEIGHBORS_4 + [(-1, -1), (-1, 1), (1, -1), (1, 1)]
@@ -241,6 +242,30 @@ def _thin_path(path: list[tuple[int, int]]) -> list[tuple[int, int]]:
     return result
 
 
+def _cluster_frontiers(
+    frontiers: set[tuple[int, int]],
+) -> list[set[tuple[int, int]]]:
+    """Group frontier cells into connected clusters using 4-connectivity."""
+    remaining = set(frontiers)
+    clusters: list[set[tuple[int, int]]] = []
+    while remaining:
+        seed = next(iter(remaining))
+        cluster: set[tuple[int, int]] = set()
+        queue = [seed]
+        while queue:
+            cell = queue.pop()
+            if cell in remaining:
+                remaining.discard(cell)
+                cluster.add(cell)
+                cx, cy = cell
+                for dx, dy in _NEIGHBORS_4:
+                    nb = (cx + dx, cy + dy)
+                    if nb in remaining:
+                        queue.append(nb)
+        clusters.append(cluster)
+    return clusters
+
+
 # ---------------------------------------------------------------------------
 # Zenoh clients
 # ---------------------------------------------------------------------------
@@ -402,6 +427,15 @@ class PathPlannerAgent:
 
     # --- public API ---
 
+    def is_path_valid(self, waypoints: list[dict]) -> bool:
+        """Return False if any remaining waypoint cell is now inside an inflated obstacle."""
+        occupied = self._grid.snapshot()
+        for wp in waypoints:
+            cell = self._grid.world_to_grid(wp["x"], wp["y"])
+            if cell in occupied:
+                return False
+        return True
+
     def handle_request(self, request: dict) -> dict:
         if request.get("type") == "NEXT_FRONTIER":
             return self._next_frontier(request)
@@ -467,15 +501,24 @@ class PathPlannerAgent:
             occupied, x_bounds, y_bounds,
         )
 
-        # Try the 30 nearest frontier cells until one is reachable via A*
-        sorted_frontiers = sorted(
-            frontiers,
-            key=lambda c: math.hypot(c[0] - robot_cell[0], c[1] - robot_cell[1]),
-        )
+        # Cluster frontiers and score each cluster by size and distance.
+        # cost = distance_to_nearest_cell / log(1 + cluster_size * FRONTIER_SIZE_WEIGHT)
+        # Lower cost = better: prefer large, nearby frontier clusters.
+        clusters = _cluster_frontiers(frontiers)
+        scored: list[tuple[float, tuple[int, int]]] = []
+        for cluster in clusters:
+            nearest = min(
+                cluster,
+                key=lambda c: math.hypot(c[0] - robot_cell[0], c[1] - robot_cell[1]),
+            )
+            dist = math.hypot(nearest[0] - robot_cell[0], nearest[1] - robot_cell[1])
+            size_bonus = math.log(1.0 + len(cluster) * FRONTIER_SIZE_WEIGHT)
+            scored.append((dist / size_bonus, nearest))
+        scored.sort()
 
         path: list[tuple[int, int]] | None = None
         target_cell: tuple[int, int] | None = None
-        for candidate in sorted_frontiers[:30]:
+        for _cost, candidate in scored:
             p = _astar(robot_cell, candidate, occupied, x_bounds, y_bounds)
             if p is not None:
                 path = p

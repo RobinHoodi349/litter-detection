@@ -92,14 +92,20 @@ class PointNavigator:
         self.publish_interval_s = publish_interval_s
         self._pose: _Pose | None = None
 
-    def run(self, stop_event: threading.Event | None = None) -> bool:
+    def run(
+        self,
+        stop_event: threading.Event | None = None,
+        timeout_s: float | None = None,
+    ) -> bool:
         """Blockiert bis zur Zielankunft oder Abbruch.
 
         Args:
             stop_event: Wenn gesetzt, bricht die Navigation sofort ab (z.B. durch BLOCK).
+            timeout_s:  Maximale Sekunden bis zur Zielankunft; bei Überschreitung wird
+                        False zurückgegeben, damit der Aufrufer neu planen kann.
 
         Returns:
-            True wenn Ziel erreicht, False bei Abbruch.
+            True wenn Ziel erreicht, False bei Abbruch oder Timeout.
         """
         import zenoh
 
@@ -107,6 +113,7 @@ class PointNavigator:
         if self.gateway.router:
             conf.insert_json5("connect/endpoints", json.dumps([self.gateway.router]))
 
+        deadline = time.time() + timeout_s if timeout_s is not None else None
         logger.info("Navigator gestartet → Ziel (%.2f, %.2f)", self.target_x, self.target_y)
 
         with zenoh.open(conf) as session:
@@ -115,6 +122,13 @@ class PointNavigator:
                 while True:
                     if stop_event is not None and stop_event.is_set():
                         logger.info("Navigation unterbrochen.")
+                        self._stop()
+                        return False
+                    if deadline is not None and time.time() > deadline:
+                        logger.warning(
+                            "Navigator: Timeout (%.0fs) — Ziel (%.2f, %.2f) nicht erreicht, neu planen.",
+                            timeout_s, self.target_x, self.target_y,
+                        )
                         self._stop()
                         return False
                     cmd = self._compute_command()
