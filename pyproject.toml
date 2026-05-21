@@ -29,6 +29,7 @@ dependencies = [
     "pydantic-ai>=1.0.0",
     "python-dotenv>=1.2.2",
     "pydantic-ai>=0.0.14",
+    "gradio>=5.0.0",
 ]
 [[tool.uv.index]]
 name = "pytorch"
@@ -47,4 +48,5 @@ build-backend = "uv_build"
 cam = "litter_detection.camera.webcam:main"
 interference = "litter_detection.interference.interference:main"
 vis = "litter_detection.visualisation.visualiser:main"
+litter-dashboard = "litter_detection.visualisation.dashboard.visualization:main"
 litter-detection = "litter_detection.agent.coordinator:main"
