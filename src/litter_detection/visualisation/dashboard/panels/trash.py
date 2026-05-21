@@ -41,4 +41,4 @@ class TrashPanel(DashboardPanel):
                 f"{detection.timestamp}\n{detection.position}"
             )
             items.append((detection.image, caption))
-        return (items,)
+        return items

@@ -1,5 +1,8 @@
+import json
 import logging
 import threading
+
+import zenoh
 
 from litter_detection.agent.pathPlanerAgent import PathPlannerAgent
 
@@ -9,7 +12,7 @@ from litter_detection.agent.models import MovementCommand, MovementSource
 from litter_detection.agent.tools.motion_types import RobotMotionGateway
 from litter_detection.config import Settings
 
-WAYPOINT_TIMEOUT_S = 30.0  # seconds before giving up on a single waypoint and re-planning
+WAYPOINT_TIMEOUT_S = 10.0  # seconds before giving up on a single waypoint and re-planning
 
 
 def _build_gateway() -> RobotMotionGateway:
@@ -36,6 +39,15 @@ class ExploreAgent:
         self._ready_to_move.set()
         # Set to interrupt a running PointNavigator
         self._nav_stop = threading.Event()
+
+        # One long-lived Zenoh session shared across all PointNavigator calls.
+        # Avoids repeated open/close which causes ZError close timeouts.
+        cfg = Settings()
+        conf = zenoh.Config()
+        if cfg.ZENOH_ROUTER:
+            conf.insert_json5("connect/endpoints", json.dumps([cfg.ZENOH_ROUTER]))
+        self._nav_session = zenoh.open(conf)
+        logger.info("ExploreAgent: Zenoh nav session opened")
 
     def handle_request(self, request):
         request_type = request.get("type")
@@ -80,7 +92,11 @@ class ExploreAgent:
             target_y=waypoint["y"],
             gateway=self.gateway,
         )
-        return nav.run(stop_event=self._nav_stop, timeout_s=timeout_s)
+        return nav.run(
+            stop_event=self._nav_stop,
+            timeout_s=timeout_s,
+            zenoh_session=self._nav_session,
+        )
 
     def stop_robot(self) -> None:
         self.gateway.publish_movement(MovementCommand(source=MovementSource.autonomous))
@@ -178,6 +194,10 @@ class ExploreAgent:
         self._nav_stop.set()
         self._ready_to_move.set()
         self.stop_robot()
+        try:
+            self._nav_session.close()
+        except Exception:
+            pass
 
         return {
             "status": "stopped",

@@ -7,7 +7,7 @@ from litter_detection.agent.models import VerifiedDetection, VerifierDeps
 
 settings = Settings()
 
-provider = OpenAIProvider(base_url="https://localhost:11434/v1", api_key="ollama")
+provider = OpenAIProvider(base_url="http://localhost:11434/v1", api_key="ollama")
 vision_model = OpenAIChatModel(settings.VISION_MODEL_NAME, provider=provider)
 
 verifier_agent = Agent(

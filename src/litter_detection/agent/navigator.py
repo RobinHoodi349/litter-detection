@@ -96,54 +96,69 @@ class PointNavigator:
         self,
         stop_event: threading.Event | None = None,
         timeout_s: float | None = None,
+        zenoh_session=None,
     ) -> bool:
         """Blockiert bis zur Zielankunft oder Abbruch.
 
         Args:
-            stop_event: Wenn gesetzt, bricht die Navigation sofort ab (z.B. durch BLOCK).
-            timeout_s:  Maximale Sekunden bis zur Zielankunft; bei Überschreitung wird
-                        False zurückgegeben, damit der Aufrufer neu planen kann.
+            stop_event:    Wenn gesetzt, bricht die Navigation sofort ab (z.B. durch BLOCK).
+            timeout_s:     Maximale Sekunden bis zur Zielankunft; bei Überschreitung wird
+                           False zurückgegeben, damit der Aufrufer neu planen kann.
+            zenoh_session: Bestehende Zenoh-Session wiederverwenden; vermeidet
+                           wiederholtes Öffnen/Schließen bei vielen Wegpunkten.
+                           Wenn None, wird eine eigene Session geöffnet und am Ende
+                           geschlossen.
 
         Returns:
             True wenn Ziel erreicht, False bei Abbruch oder Timeout.
         """
-        import zenoh
+        import zenoh as _zenoh
 
-        conf = zenoh.Config()
-        if self.gateway.router:
-            conf.insert_json5("connect/endpoints", json.dumps([self.gateway.router]))
+        _own_session = zenoh_session is None
+        if _own_session:
+            conf = _zenoh.Config()
+            if self.gateway.router:
+                conf.insert_json5("connect/endpoints", json.dumps([self.gateway.router]))
+            zenoh_session = _zenoh.open(conf)
 
         deadline = time.time() + timeout_s if timeout_s is not None else None
         logger.info("Navigator gestartet → Ziel (%.2f, %.2f)", self.target_x, self.target_y)
 
-        with zenoh.open(conf) as session:
-            sub = session.declare_subscriber(self.odom_topic, self._on_odometry)
+        sub = zenoh_session.declare_subscriber(self.odom_topic, self._on_odometry)
+        try:
+            while True:
+                if stop_event is not None and stop_event.is_set():
+                    logger.info("Navigation unterbrochen.")
+                    self._stop()
+                    return False
+                if deadline is not None and time.time() > deadline:
+                    logger.warning(
+                        "Navigator: Timeout (%.0fs) — Ziel (%.2f, %.2f) nicht erreicht, neu planen.",
+                        timeout_s, self.target_x, self.target_y,
+                    )
+                    self._stop()
+                    return False
+                cmd = self._compute_command()
+                if cmd is None:
+                    self._stop()
+                    logger.info("Ziel (%.2f, %.2f) erreicht.", self.target_x, self.target_y)
+                    return True
+                self.gateway.publish_movement(cmd)
+                time.sleep(self.publish_interval_s)
+        except KeyboardInterrupt:
+            logger.info("Navigation abgebrochen.")
+            self._stop()
+            return False
+        finally:
             try:
-                while True:
-                    if stop_event is not None and stop_event.is_set():
-                        logger.info("Navigation unterbrochen.")
-                        self._stop()
-                        return False
-                    if deadline is not None and time.time() > deadline:
-                        logger.warning(
-                            "Navigator: Timeout (%.0fs) — Ziel (%.2f, %.2f) nicht erreicht, neu planen.",
-                            timeout_s, self.target_x, self.target_y,
-                        )
-                        self._stop()
-                        return False
-                    cmd = self._compute_command()
-                    if cmd is None:
-                        self._stop()
-                        logger.info("Ziel (%.2f, %.2f) erreicht.", self.target_x, self.target_y)
-                        return True
-                    self.gateway.publish_movement(cmd)
-                    time.sleep(self.publish_interval_s)
-            except KeyboardInterrupt:
-                logger.info("Navigation abgebrochen.")
-                self._stop()
-                return False
-            finally:
                 sub.undeclare()
+            except Exception:
+                pass
+            if _own_session:
+                try:
+                    zenoh_session.close()
+                except Exception:
+                    logger.debug("Zenoh session close error (non-critical)")
 
     def _on_odometry(self, sample: Any) -> None:
         """Zenoh-Subscriber-Callback: aktualisiert die interne Pose."""

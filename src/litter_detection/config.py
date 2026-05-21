@@ -37,8 +37,8 @@ class Settings:
     CAMERA_COVERAGE_OVERLAP: float = 0.20  # min. overlap between adjacent footprints
 
     # Vision verifier model (must support image input, e.g. llava, moondream)
-    VISION_MODEL_NAME: str = "llava:latest"
-    USE_VERIFIER: bool = False
+    VISION_MODEL_NAME: str = "moondream:latest"
+    USE_VERIFIER: bool = True
     # Seconds to ignore new detections after an alert (avoids re-triggering on same litter)
     ALERT_COOLDOWN_S: float = 10.0
 
