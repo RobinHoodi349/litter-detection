@@ -35,7 +35,8 @@ from litter_detection.agent.verifier import verifier_agent
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    stream=sys.stdout,
+    handlers=[logging.StreamHandler(sys.stdout)],
+    force=True,
 )
 logger = logging.getLogger("coordinator")
 
@@ -75,10 +76,16 @@ class MissionCoordinator:
     # ------------------------------------------------------------------
 
     async def _run_detector(self) -> None:
-        detector = LitterDetector(self.session)
+        loop = asyncio.get_running_loop()
+        logger.info("Coordinator: loading detector model …")
+        try:
+            detector = await loop.run_in_executor(None, LitterDetector, self.session)
+        except Exception:
+            logger.exception("Coordinator: failed to initialise LitterDetector — detector disabled")
+            return
         detector.start()
+        logger.info("Coordinator: detector ready — listening for frames on %s", settings.topic_frame)
         last_alert_time: float = 0.0
-        loop = asyncio.get_event_loop()
 
         try:
             while True:
@@ -190,21 +197,24 @@ class MissionCoordinator:
         detector_task = asyncio.create_task(self._run_detector())
         logger.info("Coordinator: detector started")
 
-        # Wait for the exploration thread to finish (blocks the event loop
-        # via run_in_executor so that detector_task keeps running in parallel)
-        await asyncio.get_event_loop().run_in_executor(
-            None, self._explore_done.wait
-        )
-
-        logger.info("Coordinator: coverage complete — shutting down detector")
-        detector_task.cancel()
         try:
-            await detector_task
+            while not self._explore_done.is_set():
+                await asyncio.sleep(0.2)
         except asyncio.CancelledError:
-            pass
-
-        explore_thread.join(timeout=5.0)
-        logger.info("Coordinator: mission complete")
+            logger.info("Coordinator: interrupted — stopping exploration")
+            self.explore_agent.stop_exploration()
+            raise
+        finally:
+            logger.info("Coordinator: coverage complete — shutting down detector")
+            detector_task.cancel()
+            try:
+                await detector_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception("Coordinator: detector task raised an unexpected exception")
+            explore_thread.join(timeout=5.0)
+            logger.info("Coordinator: mission complete")
 
 
 def main() -> None:
@@ -216,15 +226,19 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    logger.info("Coordinator: opening Zenoh session → %s", settings.ZENOH_ROUTER)
     conf = zenoh.Config()
     conf.insert_json5("connect/endpoints", json.dumps([settings.ZENOH_ROUTER]))
     session = zenoh.open(conf)
+    logger.info("Coordinator: Zenoh session open")
 
+    logger.info("Coordinator: initialising MissionCoordinator (PathPlanner + ExploreAgent) …")
     coordinator = MissionCoordinator(
         session=session,
         field_size={"width_m": args.width, "height_m": args.height},
         lane_spacing_m=args.lane_spacing,
     )
+    logger.info("Coordinator: MissionCoordinator ready")
 
     try:
         asyncio.run(coordinator.run())

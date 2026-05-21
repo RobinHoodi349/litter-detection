@@ -1,20 +1,20 @@
 '''Configuration for the Litter Detector application'''
 from pathlib import Path
 from dataclasses import dataclass
-from litter_detection.training.train import EfficientNetB4UNet
+from litter_detection.training.train import *
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 @dataclass
 class Settings:
 # Model
-    MODEL_NAME:str = "models/best_efficientnetb4.pth"
-    MODEL_CLASS = EfficientNetB4UNet
+    MODEL_NAME:str = "models/checkpoints/best_model_efficientnetb1_model.pth"
+    MODEL_CLASS = EfficientNetB1UNet
     DROPOUT:float = 0.1
     FRAME_MAX_AGE_SECONDS:int = 1
     PROCESSING_TIMEOUT_SECONDS:int = 5
     THRESHOLD:float = 0.8
-    LITTER_COVERAGE_THRESHOLD:float = 0.01  # min fraction of pixels to trigger reactor
+    LITTER_COVERAGE_THRESHOLD:float = 0.0  # min fraction of pixels to trigger reactor
     
 
     # Zenoh config
@@ -38,7 +38,7 @@ class Settings:
 
     # Vision verifier model (must support image input, e.g. llava, moondream)
     VISION_MODEL_NAME: str = "llava:latest"
-    USE_VERIFIER: bool = True
+    USE_VERIFIER: bool = False
     # Seconds to ignore new detections after an alert (avoids re-triggering on same litter)
     ALERT_COOLDOWN_S: float = 10.0
 

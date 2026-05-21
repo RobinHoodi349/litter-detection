@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import heapq
 import json
+import logging
 import math
 import threading
 import time
@@ -23,6 +24,8 @@ import numpy as np
 import zenoh
 
 from litter_detection.agent.models import OdometryState
+
+logger = logging.getLogger("pathplanner")
 
 # --- Planner constants ---
 OBSTACLE_Z_MIN_M = 0.05   # points below this are ground (free)
@@ -260,8 +263,10 @@ class ZenohLidarClient:
         conf = zenoh.Config()
         if router:
             conf.insert_json5("connect/endpoints", json.dumps([router]))
+        logger.info("ZenohLidarClient: opening session → %s (topic=%s)", router, topic)
         self._session = zenoh.open(conf)
         self._sub = self._session.declare_subscriber(topic, self._on_lidar)
+        logger.info("ZenohLidarClient: subscribed to %s", topic)
 
     def _on_lidar(self, sample: zenoh.Sample) -> None:
         raw = json.loads(bytes(sample.payload).decode("utf-8"))
@@ -309,8 +314,10 @@ class ZenohRobotLocalizationClient:
         conf = zenoh.Config()
         if router:
             conf.insert_json5("connect/endpoints", json.dumps([router]))
+        logger.info("ZenohRobotLocalizationClient: opening session → %s (topic=%s)", router, topic)
         self._session = zenoh.open(conf)
         self._sub = self._session.declare_subscriber(topic, self._on_pose)
+        logger.info("ZenohRobotLocalizationClient: subscribed to %s", topic)
 
     def _on_pose(self, sample: zenoh.Sample) -> None:
         raw = json.loads(bytes(sample.payload).decode("utf-8"))
@@ -362,6 +369,7 @@ class PathPlannerAgent:
         from litter_detection.config import Settings
         cfg = Settings()
 
+        logger.info("PathPlannerAgent: connecting to odometry topic …")
         self.localization_client = localization_client or ZenohRobotLocalizationClient(
             topic=cfg.topic_odometry,
             router=cfg.ZENOH_ROUTER,
@@ -378,6 +386,7 @@ class PathPlannerAgent:
         self._field_origin: tuple[float, float] | None = None
 
         if lidar_client is None:
+            logger.info("PathPlannerAgent: connecting to LiDAR topic …")
             self._lidar_client: ZenohLidarClient | None = ZenohLidarClient(
                 topic=cfg.topic_lidar,
                 router=cfg.ZENOH_ROUTER,
@@ -387,6 +396,9 @@ class PathPlannerAgent:
         else:
             # Pass lidar_client=False to disable LiDAR (e.g. unit tests)
             self._lidar_client = lidar_client if lidar_client is not False else None
+
+        logger.info("PathPlannerAgent: ready (cell_size=%.2fm, footprint=%.2fx%.2fm)",
+                    grid_cell_size_m, self._footprint_half_w * 2, self._footprint_half_l * 2)
 
     # --- public API ---
 
@@ -447,7 +459,7 @@ class PathPlannerAgent:
         frontiers = self._grid.get_frontiers(x_bounds, y_bounds, occupied)
 
         if not frontiers:
-            print("PathPlannerAgent: no frontiers remaining — exploration complete")
+            logger.info("PathPlannerAgent: no frontiers remaining — exploration complete")
             return {"status": "completed", "agent": "pathplanner"}
 
         robot_cell = _nearest_free(
@@ -471,7 +483,7 @@ class PathPlannerAgent:
                 break
 
         if path is None or target_cell is None:
-            print("PathPlannerAgent: all frontiers unreachable — exploration complete")
+            logger.info("PathPlannerAgent: all frontiers unreachable — exploration complete")
             return {"status": "completed", "agent": "pathplanner"}
 
         # Remove collinear intermediate points to reduce navigator calls
@@ -482,9 +494,9 @@ class PathPlannerAgent:
             waypoints.append({"id": f"wp_{i}", "x": round(wx, 3), "y": round(wy, 3)})
 
         tx, ty = self._grid.grid_to_world(*target_cell)
-        print(
-            f"PathPlannerAgent: {len(frontiers)} frontiers → "
-            f"target ({tx:.2f}, {ty:.2f}), {len(waypoints)} waypoints"
+        logger.info(
+            "PathPlannerAgent: %d frontiers → target (%.2f, %.2f), %d waypoints",
+            len(frontiers), tx, ty, len(waypoints),
         )
 
         return {

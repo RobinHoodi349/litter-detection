@@ -1,6 +1,9 @@
+import logging
 import threading
 
 from litter_detection.agent.pathPlanerAgent import PathPlannerAgent
+
+logger = logging.getLogger("explore-agent")
 from litter_detection.agent.navigator import PointNavigator
 from litter_detection.agent.models import MovementCommand, MovementSource
 from litter_detection.agent.tools.motion_types import RobotMotionGateway
@@ -96,11 +99,11 @@ class ExploreAgent:
             })
 
             if result.get("status") == "completed":
-                print("ExploreAgent: full area explored.")
+                logger.info("ExploreAgent: full area explored.")
                 break
 
             if result.get("status") != "success":
-                print(f"ExploreAgent: planner error — {result.get('message')}")
+                logger.warning("ExploreAgent: planner error — %s", result.get("message"))
                 break
 
             self.route = result.get("waypoints", [])
@@ -115,7 +118,7 @@ class ExploreAgent:
                     break
 
                 reached = self.move_to_waypoint(waypoint)
-                print(f"ExploreAgent: waypoint {waypoint['id']} reached={reached}")
+                logger.info("ExploreAgent: waypoint %s reached=%s", waypoint["id"], reached)
 
                 if not reached and self.active:
                     # Interrupted mid-route (BLOCK); outer loop will re-plan
