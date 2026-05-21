@@ -20,7 +20,7 @@ class CameraPanel(DashboardPanel):
 
         with gr.Column(elem_classes=["dashboard-panel", self.theme.css_class]):
             self.render_header()
-            image = gr.Image(label=None, show_label=False, type="numpy", height=360, elem_classes=["media-fill"])
+            image = gr.Image(label=None, show_label=False, type="numpy", elem_classes=["media-fill"])
             meta = gr.Markdown(elem_classes=["panel-meta"])
         return [image, meta]
 

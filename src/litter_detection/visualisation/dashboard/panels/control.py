@@ -26,7 +26,8 @@ class ControlPanel(DashboardPanel):
             status = gr.HTML(value=self._status_html(), elem_classes=["status-box"])
             for label in self.config.control_buttons:
                 variant = "stop" if label == "Stop" else "secondary"
-                buttons.append(gr.Button(label, variant=variant, elem_classes=["control-button"]))
+                classes = ["control-button", "control-stop" if label == "Stop" else "control-secondary"]
+                buttons.append(gr.Button(label, variant=variant, elem_classes=classes))
             output = gr.HTML(value="", elem_classes=["command-output"])
         return [status, output, *buttons]
 
