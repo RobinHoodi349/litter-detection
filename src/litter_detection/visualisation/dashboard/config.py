@@ -25,6 +25,7 @@ class DashboardConfig:
     host: str = os.getenv("LITTER_DASHBOARD_HOST", "127.0.0.1")
     port: int = int(os.getenv("LITTER_DASHBOARD_PORT", "7860"))
     share: bool = _env_bool("LITTER_DASHBOARD_SHARE", False)
+    provider: str = os.getenv("LITTER_DASHBOARD_PROVIDER", "zenoh")
     refresh_interval_s: float = float(os.getenv("LITTER_DASHBOARD_REFRESH_S", "1.0"))
     max_log_entries: int = int(os.getenv("LITTER_DASHBOARD_MAX_LOGS", "250"))
     max_detections: int = int(os.getenv("LITTER_DASHBOARD_MAX_DETECTIONS", "80"))
