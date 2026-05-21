@@ -5,7 +5,11 @@ from __future__ import annotations
 import gradio as gr
 
 from litter_detection.visualisation.dashboard.config import DashboardConfig
-from litter_detection.visualisation.dashboard.data_provider import DashboardDataProvider, QueueDashboardDataProvider
+from litter_detection.visualisation.dashboard.data_provider import (
+    DashboardDataProvider,
+    QueueDashboardDataProvider,
+    ZenohDashboardDataProvider,
+)
 from litter_detection.visualisation.dashboard.panels.camera import CameraPanel
 from litter_detection.visualisation.dashboard.panels.control import ControlPanel
 from litter_detection.visualisation.dashboard.panels.logs import LogsPanel
@@ -232,7 +236,7 @@ def build_dashboard(
     """Build the complete dashboard without launching it."""
 
     config = config or DashboardConfig()
-    provider = provider or QueueDashboardDataProvider(config)
+    provider = provider or _build_provider(config)
 
     camera_panel = CameraPanel(provider)
     map_panel = MapPanel(provider)
@@ -281,6 +285,14 @@ def build_dashboard(
         app.load(control_panel.status_update, outputs=[status_output])
 
     return app
+
+
+def _build_provider(config: DashboardConfig) -> DashboardDataProvider:
+    """Create the dashboard provider selected by configuration."""
+
+    if config.provider.strip().lower() == "mock":
+        return QueueDashboardDataProvider(config)
+    return ZenohDashboardDataProvider(config)
 
 
 def main() -> None:
