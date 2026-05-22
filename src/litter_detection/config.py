@@ -24,6 +24,7 @@ class Settings:
     topic_mask_probabilities:str = "litter/mask/probabilities"
     topic_visualization:str = "litter/visualization"
     topic_alert:str = "litter/alert"
+    topic_obstacle:str = "litter/obstacles"
     topic_robodog_command:str = "litter/robodog/command"
     topic_movement_blocked:str = "litter/movement_blocked"
     topic_odometry:str = "robodog/system_state/odometry"

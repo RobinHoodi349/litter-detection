@@ -429,6 +429,7 @@ footer,
     min-height: 0;
     color: #fed7aa;
     font-size: clamp(0.7rem, 1vh, 0.82rem);
+    overflow: hidden;
 }
 .control-button { width: 100%; }
 .control-button button,
@@ -449,6 +450,54 @@ footer,
 }
 .control-stop button:hover {
     background: #dc2626 !important;
+}
+.map-download,
+.map-download .wrap,
+.map-download .block {
+    min-height: 30px !important;
+    max-height: 40px !important;
+    overflow: hidden !important;
+    background: #1f1714 !important;
+    border-color: #7c4a33 !important;
+}
+.manual-control {
+    border: 1px solid #7c4a33;
+    border-radius: 6px;
+    padding: 5px;
+    background: #1f1714;
+    display: grid;
+    gap: 4px;
+}
+.manual-speed,
+.manual-speed .wrap,
+.manual-speed .block {
+    min-height: 36px !important;
+    margin: 0 !important;
+}
+.manual-speed label {
+    color: #fed7aa !important;
+    font-size: clamp(0.68rem, 0.95vh, 0.78rem) !important;
+}
+.controller-row {
+    gap: 5px;
+    align-items: center;
+    justify-content: center;
+    min-height: 0;
+}
+.controller-button,
+.controller-button button {
+    min-width: 0 !important;
+    width: 100% !important;
+}
+.controller-button button {
+    min-height: clamp(24px, 3.3dvh, 32px) !important;
+    padding: 0 !important;
+    font-size: clamp(0.8rem, 1.25vh, 1.05rem) !important;
+    line-height: 1 !important;
+}
+.controller-stop button {
+    background: #991b1b !important;
+    border-color: #ef4444 !important;
 }
 @media (max-height: 760px) {
     .dashboard-root {
@@ -486,6 +535,11 @@ footer,
     .log-scroll {
         height: 100%;
         max-height: 100%;
+    }
+    .manual-control { padding: 4px; gap: 3px; }
+    .controller-row { gap: 4px; }
+    .controller-button button {
+        min-height: clamp(22px, 3dvh, 28px) !important;
     }
 }
 @media (max-width: 900px) {
@@ -542,21 +596,28 @@ def build_dashboard(
                 with gr.Column(scale=1):
                     control_components = control_panel.render()
 
-        status_output = control_components[0]
-        command_output = control_components[1]
-        control_buttons = control_components[2:]
+        status_output = control_components.status
+        command_output = control_components.command_output
+        map_file = control_components.map_file
+        manual_group = control_components.manual_group
 
         timer = gr.Timer(config.refresh_interval_s)
         timer.tick(camera_panel.update, outputs=camera_outputs)
         timer.tick(map_panel.update, outputs=map_outputs)
         timer.tick(trash_panel.update, outputs=trash_outputs)
         timer.tick(logs_panel.update, inputs=[log_level], outputs=[log_count, log_html])
-        timer.tick(control_panel.status_update, outputs=[status_output])
+        timer.tick(control_panel.status_update, outputs=[status_output, manual_group])
 
         log_level.change(logs_panel.update, inputs=[log_level], outputs=[log_count, log_html])
-        for button in control_buttons:
+        for label, button in control_components.action_buttons.items():
             button.click(
-                lambda label=button.value: control_panel.handle_button(label),
+                lambda label=label: control_panel.handle_button(label),
+                outputs=[status_output, command_output, map_file, manual_group],
+            )
+        for direction, button in control_components.manual_buttons.items():
+            button.click(
+                lambda speed, direction=direction: control_panel.handle_manual_button(direction, speed),
+                inputs=[control_components.speed],
                 outputs=[status_output, command_output],
             )
 
@@ -564,7 +625,7 @@ def build_dashboard(
         app.load(map_panel.update, outputs=map_outputs)
         app.load(trash_panel.update, outputs=trash_outputs)
         app.load(logs_panel.update, inputs=[log_level], outputs=[log_count, log_html])
-        app.load(control_panel.status_update, outputs=[status_output])
+        app.load(control_panel.status_update, outputs=[status_output, manual_group])
 
     return app
 

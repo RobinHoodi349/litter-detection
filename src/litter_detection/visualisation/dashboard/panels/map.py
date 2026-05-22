@@ -28,4 +28,11 @@ class MapPanel(DashboardPanel):
         """Return the latest map and robot pose summary."""
 
         frame = self.provider.get_map_frame()
-        return frame.image, f"Position: **x={frame.x_m:.2f}m, y={frame.y_m:.2f}m** | Yaw: **{frame.yaw_deg:.0f} deg**"
+        return (
+            frame.image,
+            (
+                f"Position: **x={frame.x_m:.2f}m, y={frame.y_m:.2f}m** | "
+                f"Yaw: **{frame.yaw_deg:.0f} deg** | "
+                f"Hindernisse: **Kamera {frame.camera_obstacles} / LiDAR {frame.lidar_obstacles}**"
+            ),
+        )

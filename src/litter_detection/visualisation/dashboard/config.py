@@ -29,6 +29,10 @@ class DashboardConfig:
     refresh_interval_s: float = float(os.getenv("LITTER_DASHBOARD_REFRESH_S", "1.0"))
     max_log_entries: int = int(os.getenv("LITTER_DASHBOARD_MAX_LOGS", "250"))
     max_detections: int = int(os.getenv("LITTER_DASHBOARD_MAX_DETECTIONS", "80"))
+    max_obstacles: int = int(os.getenv("LITTER_DASHBOARD_MAX_OBSTACLES", "400"))
+    obstacle_max_age_s: float = float(os.getenv("LITTER_DASHBOARD_OBSTACLE_MAX_AGE_S", "60"))
+    lidar_obstacle_cell_size_m: float = float(os.getenv("LITTER_DASHBOARD_LIDAR_CELL_SIZE_M", "0.25"))
+    camera_fov_h_deg: float = float(os.getenv("LITTER_DASHBOARD_CAMERA_FOV_H_DEG", "90"))
     initial_mode: str = os.getenv("LITTER_DASHBOARD_INITIAL_MODE", "IDLE")
     control_buttons: tuple[str, ...] = field(
         default_factory=lambda: tuple(
