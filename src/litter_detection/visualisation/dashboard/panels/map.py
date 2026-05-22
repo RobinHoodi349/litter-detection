@@ -20,7 +20,7 @@ class MapPanel(DashboardPanel):
 
         with gr.Column(elem_classes=["dashboard-panel", self.theme.css_class]):
             self.render_header()
-            image = gr.Image(label=None, show_label=False, type="numpy", height=360, elem_classes=["media-fill"])
+            image = gr.Image(label=None, show_label=False, type="numpy", elem_classes=["media-fill"])
             pose = gr.Markdown(elem_classes=["panel-meta"])
         return [image, pose]
 
@@ -28,4 +28,11 @@ class MapPanel(DashboardPanel):
         """Return the latest map and robot pose summary."""
 
         frame = self.provider.get_map_frame()
-        return frame.image, f"Position: **x={frame.x_m:.2f}m, y={frame.y_m:.2f}m** | Yaw: **{frame.yaw_deg:.0f} deg**"
+        return (
+            frame.image,
+            (
+                f"Position: **x={frame.x_m:.2f}m, y={frame.y_m:.2f}m** | "
+                f"Yaw: **{frame.yaw_deg:.0f} deg** | "
+                f"Hindernisse: **Kamera {frame.camera_obstacles} / LiDAR {frame.lidar_obstacles}**"
+            ),
+        )

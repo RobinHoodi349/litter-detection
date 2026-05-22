@@ -25,7 +25,6 @@ class TrashPanel(DashboardPanel):
                 show_label=False,
                 columns=1,
                 rows=3,
-                height=260,
                 object_fit="cover",
                 elem_classes=["scroll-panel"],
             )

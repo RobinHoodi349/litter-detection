@@ -53,4 +53,10 @@ class LogsPanel(DashboardPanel):
                 f"<span class='log-message'>{entry.message}</span>"
                 "</div>"
             )
-        return "<div class='log-scroll'><div class='log-list'>" + "".join(rows) + "</div></div>"
+        return (
+            "<div class='log-scroll' tabindex='0' "
+            "onwheel='this.scrollTop += event.deltaY; event.preventDefault(); event.stopPropagation();'>"
+            "<div class='log-list'>"
+            + "".join(rows)
+            + "</div></div>"
+        )
