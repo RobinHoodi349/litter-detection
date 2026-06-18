@@ -27,6 +27,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from litter_detection.config import Settings
+from litter_detection.zenoh_session import open_zenoh_session
 from litter_detection.agent.actions import (
     block_movement,
     publish_detection_overlay,
@@ -335,9 +336,7 @@ def main() -> None:
     args = parser.parse_args()
 
     logger.info("Coordinator: opening Zenoh session → %s", settings.ZENOH_ROUTER)
-    conf = zenoh.Config()
-    conf.insert_json5("connect/endpoints", json.dumps([settings.ZENOH_ROUTER]))
-    session = zenoh.open(conf)
+    session = open_zenoh_session(settings.ZENOH_ROUTER)
     logger.info("Coordinator: Zenoh session open")
 
     logger.info("Coordinator: initialising MissionCoordinator (PathPlanner + ExploreAgent) …")

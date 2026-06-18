@@ -24,6 +24,7 @@ import numpy as np
 import zenoh
 
 from litter_detection.agent.models import OdometryState
+from litter_detection.zenoh_session import open_zenoh_session
 
 logger = logging.getLogger("pathplanner")
 
@@ -322,11 +323,8 @@ class ZenohLidarClient:
             self._session = session
             self._owns_session = False
         else:
-            conf = zenoh.Config()
-            if router:
-                conf.insert_json5("connect/endpoints", json.dumps([router]))
             logger.info("ZenohLidarClient: opening session → %s (topic=%s)", router, topic)
-            self._session = zenoh.open(conf)
+            self._session = open_zenoh_session(router)
             self._owns_session = True
         self._sub = self._session.declare_subscriber(topic, self._on_lidar)
         logger.info("ZenohLidarClient: subscribed to %s", topic)
@@ -379,11 +377,8 @@ class ZenohRobotLocalizationClient:
         if session is not None:
             self._session = session
         else:
-            conf = zenoh.Config()
-            if router:
-                conf.insert_json5("connect/endpoints", json.dumps([router]))
             logger.info("ZenohRobotLocalizationClient: opening session → %s (topic=%s)", router, topic)
-            self._session = zenoh.open(conf)
+            self._session = open_zenoh_session(router)
         self._sub = self._session.declare_subscriber(topic, self._on_pose)
         logger.info("ZenohRobotLocalizationClient: subscribed to %s", topic)
 

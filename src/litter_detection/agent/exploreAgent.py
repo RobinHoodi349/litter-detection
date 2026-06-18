@@ -1,8 +1,5 @@
-import json
 import logging
 import threading
-
-import zenoh
 
 from litter_detection.agent.pathPlanerAgent import PathPlannerAgent
 
@@ -11,6 +8,7 @@ from litter_detection.agent.navigator import PointNavigator
 from litter_detection.agent.models import MovementCommand, MovementSource
 from litter_detection.agent.tools.motion_types import RobotMotionGateway
 from litter_detection.config import Settings
+from litter_detection.zenoh_session import open_zenoh_session
 
 WAYPOINT_TIMEOUT_S = 10.0  # seconds before giving up on a single waypoint and re-planning
 
@@ -32,10 +30,7 @@ class ExploreAgent:
             self._nav_session = session
             self._owns_nav_session = False
         else:
-            conf = zenoh.Config()
-            if cfg.ZENOH_ROUTER:
-                conf.insert_json5("connect/endpoints", json.dumps([cfg.ZENOH_ROUTER]))
-            self._nav_session = zenoh.open(conf)
+            self._nav_session = open_zenoh_session(cfg.ZENOH_ROUTER)
             self._owns_nav_session = True
             logger.info("ExploreAgent: Zenoh nav session opened")
 

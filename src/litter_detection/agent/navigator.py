@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from litter_detection.config import Settings
+from litter_detection.zenoh_session import open_zenoh_session
 from litter_detection.agent.models import MovementCommand, MovementSource, OdometryState
 from litter_detection.agent.tools.motion_types import (
     AUTONOMOUS_MAX_X_MPS,
@@ -117,14 +118,9 @@ class PointNavigator:
         Returns:
             True wenn Ziel erreicht, False bei Abbruch oder Timeout.
         """
-        import zenoh as _zenoh
-
         _own_session = zenoh_session is None
         if _own_session:
-            conf = _zenoh.Config()
-            if self.gateway.router:
-                conf.insert_json5("connect/endpoints", json.dumps([self.gateway.router]))
-            zenoh_session = _zenoh.open(conf)
+            zenoh_session = open_zenoh_session(self.gateway.router)
 
         deadline = time.time() + timeout_s if timeout_s is not None else None
         logger.info("Navigator gestartet → Ziel (%.2f, %.2f)", self.target_x, self.target_y)

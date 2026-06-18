@@ -14,6 +14,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(AUTO_RESEARCH_DIR))
 
 from litter_detection.config import Settings
+from litter_detection.zenoh_session import open_zenoh_session
 from litter_detection.agent.actions import block_movement, publish_zenoh_alert
 from litter_detection.agent.detector import LitterDetector
 from litter_detection.agent.models import VerifiedDetection
@@ -117,9 +118,7 @@ async def run(zenoh_session: zenoh.Session) -> None:
 
 
 def main() -> None:
-    conf = zenoh.Config()
-    conf.insert_json5("connect/endpoints", json.dumps([settings.ZENOH_ROUTER]))
-    session = zenoh.open(conf)
+    session = open_zenoh_session(settings.ZENOH_ROUTER)
     try:
         asyncio.run(run(session))
     except KeyboardInterrupt:

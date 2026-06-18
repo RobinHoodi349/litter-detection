@@ -968,12 +968,9 @@ class ZenohDashboardDataProvider(QueueDashboardDataProvider):
         if self._session is not None:
             return self._session
 
-        import zenoh
+        from litter_detection.zenoh_session import open_zenoh_session
 
-        conf = zenoh.Config()
-        if self.settings.router:
-            conf.insert_json5("connect/endpoints", json.dumps([self.settings.router]))
-        return zenoh.open(conf)
+        return open_zenoh_session(self.settings.router)
 
     def _log_connection_error(self, message: str) -> None:
         if message == self._last_connection_error:

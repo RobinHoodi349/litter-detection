@@ -69,17 +69,14 @@ class RobotMotionGateway:
             return self._session
 
         try:
-            import zenoh
+            from litter_detection.zenoh_session import open_zenoh_session
         except ImportError as exc:
             raise RuntimeError(
                 "Zenoh ist nicht installiert. Bitte `uv sync` ausführen oder "
                 "MOVE_AGENT_DRY_RUN=1 setzen."
             ) from exc
 
-        conf = zenoh.Config()
-        if self.router:
-            conf.insert_json5("connect/endpoints", json.dumps([self.router]))
-        self._session = zenoh.open(conf)
+        self._session = open_zenoh_session(self.router)
         return self._session
 
 

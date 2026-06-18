@@ -1,5 +1,6 @@
 from pathlib import Path
 from litter_detection.config import Settings
+from litter_detection.zenoh_session import open_zenoh_session
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -192,9 +193,7 @@ def visualize_mask(frame_bytes: bytes, mask_binary: np.ndarray, original_frame_h
 def main():
     load_model()
 
-    conf = zenoh.Config()
-    conf.insert_json5("connect/endpoints", json.dumps([settings.ZENOH_ROUTER]))
-    z = zenoh.open(conf)
+    z = open_zenoh_session(settings.ZENOH_ROUTER)
     frame_sub = z.declare_subscriber(settings.topic_frame, on_frame_received)
     logging.info(f"Subscribed to Zenoh topic: {settings.topic_frame}")
     
