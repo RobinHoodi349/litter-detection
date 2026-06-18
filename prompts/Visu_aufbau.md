@@ -65,3 +65,47 @@ Liefere die vollständige Dateistruktur, alle Dateien mit vollständigem Code un
 | **Code Quality (0 - 4)**            | 3             |
 | **Discrepancy from Prompt (0 - 4)** | 3             |
 | **Notes**                           | -             |
+
+# Visualisierung Update
+
+## Prompt:
+
+Du bist ein erfahrener UI/UX-Designer mit Spezialisierung auf industrielle Kontrollsysteme und Dashboards. Ich habe dir meine aktuelle Visualisierung hochgeladen und möchte, dass du sie grundlegend überarbeitest.
+
+**Deine Aufgabe:** Analysiere die aktuelle Visu und erstelle ein überarbeitetes, modernes Design mit folgenden Anforderungen:
+
+**Stilrichtung & Optik:**
+- Modernes Kontrollsystem-Erscheinungsbild (angelehnt an professionelle SCADA/HMI-Interfaces oder industrielle Dashboards)
+- Klares, aufgeräumtes Layout mit hoher visueller Hierarchie
+- Farbschema: **Blau / Lila / Gold** – dunkel gehaltener Hintergrund mit hellen Akzenten in diesen Farben
+
+**Layout-Anforderungen:**
+- Alle Inhalte und Informationen müssen **ohne Scrollen** auf einem Bildschirm sichtbar sein
+- Kompakte, aber gut lesbare Darstellung aller Elemente
+- Logische Gruppierung zusammengehöriger Steuer- und Anzeigeelemente
+
+**Designelemente:**
+- Moderne, technisch wirkende Typografie
+- Deutlich sichtbare Status-Indikatoren, Messwerte und Bedienelemente
+- Verwendung von Karten/Panels mit feinen Rahmen oder Glüheffekten in den Akzentfarben
+- Professionelle, kontrastreiche Darstellung aller Informationen
+
+Überarbeite das Design vollständig und liefere das modernisierte Layout als visuell ausgearbeitetes Ergebnis. Behalte alle funktionalen Inhalte der ursprünglichen Visu bei – verändere nur das visuelle Design.
+
+**Umsetzungsentscheidungen (im Dialog geklärt):**
+- Umsetzung direkt im Gradio-CSS (`visualization.py`), keine Strukturänderung am Layout.
+- Farblogik: **einheitliche, dezente Panel-Rahmen** (keine Akzent-Leiste oben); Blau/Lila/Gold ausschließlich für Status-Indikatoren, aktive Zustände und Messwerte.
+- Glow dezent & professionell (ruhiger SCADA-Look), Glüheffekte nur an aktiven Elementen.
+- Geänderte Dateien: `visualisation/dashboard/visualization.py` (CSS-Theme), `panels/control.py` (Status-Tiles mit Modus-Pill / Batterie-Balken / Verbindungs-LED, Start-Button als Primär-Akzent).
+
+## Auswertung
+
+[Ausführliche Beschreibung der Metric](prompt_metricen.md)
+
+| Metric                              | Score                         |
+|-------------------------------------|-------------------------------|
+| **Tool used**                       | Claude Code (Claude Opus 4.8) |
+| **Error Rate (0 - 4)**              | 4                             |
+| **Code Quality (0 - 4)**            | 3                             |
+| **Discrepancy from Prompt (0 - 4)** | 3                             |
+| **Notes**                           | -                             |

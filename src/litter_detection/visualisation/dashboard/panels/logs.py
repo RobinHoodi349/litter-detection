@@ -30,7 +30,7 @@ class LogsPanel(DashboardPanel):
                     container=False,
                     elem_classes=["level-filter"],
                 )
-                count = gr.Markdown("Eintraege: **0**", elem_classes=["panel-meta", "log-count"])
+                count = gr.Markdown("Einträge: **0**", elem_classes=["panel-meta", "log-count"])
             log_html = gr.HTML(elem_classes=["log-frame"])
         return [level, count, log_html]
 
@@ -38,7 +38,7 @@ class LogsPanel(DashboardPanel):
         """Return log count and color-coded HTML entries."""
 
         entries = self.provider.get_logs(level_filter)
-        return f"Eintraege: **{len(entries)}**", self._render_entries(entries)
+        return f"Einträge: **{len(entries)}**", self._render_entries(entries)
 
     @staticmethod
     def _render_entries(entries: list[LogEntry]) -> str:

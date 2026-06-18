@@ -42,7 +42,13 @@ class ControlPanel(DashboardPanel):
             status = gr.HTML(value=self._status_html(), elem_classes=["status-box"])
             for label in self.config.control_buttons:
                 variant = "stop" if label == "Stop" else "secondary"
-                classes = ["control-button", "control-stop" if label == "Stop" else "control-secondary"]
+                classes = ["control-button"]
+                if label == "Stop":
+                    classes.append("control-stop")
+                elif label == "Start":
+                    classes.append("control-start")
+                else:
+                    classes.append("control-secondary")
                 buttons[label] = gr.Button(label, variant=variant, elem_classes=classes)
             map_file = gr.File(label="Karten-Download", visible=False, interactive=False, elem_classes=["map-download"])
             with gr.Group(visible=self._manual_visible(), elem_classes=["manual-control"]) as manual_group:
@@ -131,10 +137,25 @@ class ControlPanel(DashboardPanel):
         mode = mode or status.mode
         battery_percent = battery_percent if battery_percent is not None else status.battery_percent
         connected = connected or ("verbunden" if status.connected else "getrennt")
+
+        is_connected = connected.strip().lower().startswith("verbunden")
+        conn_state = "ok" if is_connected else "alert"
+        batt_pct = max(0, min(100, int(battery_percent)))
+        batt_state = "low" if batt_pct <= 20 else "mid" if batt_pct <= 50 else "ok"
+
         return (
             "<div class='status-grid'>"
-            f"<span>Modus</span><strong>{mode}</strong>"
-            f"<span>Batterie</span><strong>{battery_percent}%</strong>"
-            f"<span>Verbindung</span><strong>{connected}</strong>"
+            "<span class='stat-label'>Modus</span>"
+            f"<span class='stat-cell'><span class='mode-pill'>{mode}</span></span>"
+            "<span class='stat-label'>Batterie</span>"
+            "<span class='stat-cell'>"
+            "<span class='batt-track'>"
+            f"<span class='batt-fill {batt_state}' style='width:{batt_pct}%'></span>"
+            "</span>"
+            f"<span class='batt-pct'>{batt_pct}%</span>"
+            "</span>"
+            "<span class='stat-label'>Verbindung</span>"
+            f"<span class='stat-cell'><span class='led {conn_state}'></span>"
+            f"<span class='conn-text'>{connected}</span></span>"
             "</div>"
         )
