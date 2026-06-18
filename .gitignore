@@ -13,3 +13,6 @@ mlflow.db
 error_analysis/
 
 Notiz
+
+# Jetson/RealSense vendor binaries (too large for GitHub, transferred to Jetson directly)
+vendor/
