@@ -51,9 +51,10 @@ class Settings:
     CAMERA_COVERAGE_OVERLAP: float = 0.20  # min. overlap between adjacent footprints
 
     # Vision verifier model (must support image input + structured output).
-    # qwen2.5vl handles both reliably and fits the Jetson AGX Orin (~6 GB at 7b).
-    # On low-memory hosts override with e.g. VISION_MODEL_NAME=moondream:latest.
-    VISION_MODEL_NAME: str = os.getenv("VISION_MODEL_NAME", "qwen2.5vl:7b")
+    # qwen2.5vl handles both reliably; the 3b variant keeps latency low on the
+    # Jetson (~2-3 GB) and is plenty for the binary litter yes/no decision.
+    # Bump to qwen2.5vl:7b for more accuracy, or moondream:latest on tiny hosts.
+    VISION_MODEL_NAME: str = os.getenv("VISION_MODEL_NAME", "qwen2.5vl:3b")
     USE_VERIFIER: bool = _env_bool("USE_VERIFIER", True)
     # Seconds to ignore new detections after an alert (avoids re-triggering on same litter)
     ALERT_COOLDOWN_S: float = 10.0
