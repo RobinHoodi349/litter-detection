@@ -12,6 +12,25 @@ logger = logging.getLogger("litter-detector-agent")
 settings = Settings()
 
 
+async def publish_detection_overlay(
+    session: zenoh.Session,
+    annotated_frame: bytes | None,
+) -> None:
+    """Publish the detector's annotated overlay (recognised mask) for the UI.
+
+    Sent on the visualization topic so the dashboard can show *what the model
+    detected* (red mask over the litter) in its validation view. Published just
+    before the alert so the dashboard has the matching overlay on hand.
+    """
+
+    if annotated_frame is None:
+        return
+    session.put(settings.topic_visualization, annotated_frame)
+    logger.info(
+        f"[Overlay] → {settings.topic_visualization}  ({len(annotated_frame)} bytes)"
+    )
+
+
 async def publish_zenoh_alert(
     session: zenoh.Session,
     detection: DetectionResult,

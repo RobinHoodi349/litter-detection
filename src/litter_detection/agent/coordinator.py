@@ -27,7 +27,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from litter_detection.config import Settings
-from litter_detection.agent.actions import block_movement, publish_zenoh_alert
+from litter_detection.agent.actions import (
+    block_movement,
+    publish_detection_overlay,
+    publish_zenoh_alert,
+)
 from litter_detection.agent.detector import LitterDetector, crop_to_detection
 from litter_detection.agent.exploreAgent import ExploreAgent
 from litter_detection.agent.models import DetectionResult, VerifiedDetection, VerifierDeps
