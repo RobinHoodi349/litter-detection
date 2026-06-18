@@ -1,10 +1,18 @@
+import json
+import logging
 import threading
 
+import zenoh
+
 from litter_detection.agent.pathPlanerAgent import PathPlannerAgent
+
+logger = logging.getLogger("explore-agent")
 from litter_detection.agent.navigator import PointNavigator
 from litter_detection.agent.models import MovementCommand, MovementSource
 from litter_detection.agent.tools.motion_types import RobotMotionGateway
 from litter_detection.config import Settings
+
+WAYPOINT_TIMEOUT_S = 10.0  # seconds before giving up on a single waypoint and re-planning
 
 
 def _build_gateway() -> RobotMotionGateway:
@@ -17,8 +25,21 @@ def _build_gateway() -> RobotMotionGateway:
 
 
 class ExploreAgent:
-    def __init__(self, pathplanner=None, gateway=None):
-        self.pathplanner = pathplanner or PathPlannerAgent()
+    def __init__(self, pathplanner=None, gateway=None, session=None):
+        cfg = Settings()
+
+        if session is not None:
+            self._nav_session = session
+            self._owns_nav_session = False
+        else:
+            conf = zenoh.Config()
+            if cfg.ZENOH_ROUTER:
+                conf.insert_json5("connect/endpoints", json.dumps([cfg.ZENOH_ROUTER]))
+            self._nav_session = zenoh.open(conf)
+            self._owns_nav_session = True
+            logger.info("ExploreAgent: Zenoh nav session opened")
+
+        self.pathplanner = pathplanner or PathPlannerAgent(session=self._nav_session)
         self.gateway = gateway or _build_gateway()
 
         self.route = []
@@ -68,14 +89,30 @@ class ExploreAgent:
 
         return self.execute_frontier_loop()
 
-    def move_to_waypoint(self, waypoint) -> bool:
+    def move_to_waypoint(self, waypoint, timeout_s: float = WAYPOINT_TIMEOUT_S) -> bool:
         self._nav_stop.clear()
         nav = PointNavigator(
             target_x=waypoint["x"],
             target_y=waypoint["y"],
             gateway=self.gateway,
         )
-        return nav.run(stop_event=self._nav_stop)
+        return nav.run(
+            stop_event=self._nav_stop,
+            timeout_s=timeout_s,
+            zenoh_session=self._nav_session,
+            collision_check=self._collision_check,
+        )
+
+    def _collision_check(self, x: float, y: float, yaw_deg: float) -> bool:
+        """Forward-clearance probe used by the navigator to avoid driving into obstacles."""
+        check = getattr(self.pathplanner, "is_forward_clear", None)
+        if check is None:
+            return True
+        try:
+            return check(x, y, yaw_deg)
+        except Exception:
+            logger.debug("ExploreAgent: collision check failed", exc_info=True)
+            return True
 
     def stop_robot(self) -> None:
         self.gateway.publish_movement(MovementCommand(source=MovementSource.autonomous))
@@ -96,17 +133,17 @@ class ExploreAgent:
             })
 
             if result.get("status") == "completed":
-                print("ExploreAgent: full area explored.")
+                logger.info("ExploreAgent: full area explored.")
                 break
 
             if result.get("status") != "success":
-                print(f"ExploreAgent: planner error — {result.get('message')}")
+                logger.warning("ExploreAgent: planner error — %s", result.get("message"))
                 break
 
             self.route = result.get("waypoints", [])
 
             # Navigate through all A* waypoints leading to the frontier
-            for waypoint in self.route:
+            for wp_idx, waypoint in enumerate(self.route):
                 if not self.active:
                     break
 
@@ -115,10 +152,10 @@ class ExploreAgent:
                     break
 
                 reached = self.move_to_waypoint(waypoint)
-                print(f"ExploreAgent: waypoint {waypoint['id']} reached={reached}")
+                logger.info("ExploreAgent: waypoint %s reached=%s", waypoint["id"], reached)
 
                 if not reached and self.active:
-                    # Interrupted mid-route (BLOCK); outer loop will re-plan
+                    # Timeout or BLOCK — outer loop will re-plan with latest LiDAR data
                     break
 
                 if not reached:
@@ -126,6 +163,15 @@ class ExploreAgent:
                     break
 
                 self.current_waypoint_index += 1
+
+                # After each step, verify remaining waypoints are still obstacle-free.
+                # New LiDAR data may have revealed obstacles on the planned path.
+                remaining = self.route[wp_idx + 1:]
+                if remaining and not self.pathplanner.is_path_valid(remaining):
+                    logger.info(
+                        "ExploreAgent: remaining path blocked by new LiDAR data — re-planning"
+                    )
+                    break
 
         self.active = False
 
@@ -164,6 +210,11 @@ class ExploreAgent:
         self._nav_stop.set()
         self._ready_to_move.set()
         self.stop_robot()
+        if self._owns_nav_session:
+            try:
+                self._nav_session.close()
+            except Exception:
+                pass
 
         return {
             "status": "stopped",

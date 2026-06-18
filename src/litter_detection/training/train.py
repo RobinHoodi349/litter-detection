@@ -785,11 +785,13 @@ class EfficientNetB4UNet(nn.Module):
 class EfficientNetB1UNet(nn.Module):
     """U-Net with a pretrained EfficientNet-B1 encoder."""
 
-    def __init__(self, dropout: float = DROPOUT):
+    def __init__(self, dropout: float = DROPOUT, pretrained: bool = True):
         super().__init__()
 
+        # At inference the trained checkpoint replaces every weight, so skip the
+        # ImageNet download (pretrained=False) — it needs internet and is wasted.
         backbone = tv_models.efficientnet_b1(
-            weights=tv_models.EfficientNet_B1_Weights.IMAGENET1K_V1
+            weights=tv_models.EfficientNet_B1_Weights.IMAGENET1K_V1 if pretrained else None
         )
         features = backbone.features
 

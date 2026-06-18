@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import heapq
 import json
+import logging
 import math
 import threading
 import time
@@ -24,12 +25,16 @@ import zenoh
 
 from litter_detection.agent.models import OdometryState
 
+logger = logging.getLogger("pathplanner")
+
 # --- Planner constants ---
 OBSTACLE_Z_MIN_M = 0.05   # points below this are ground (free)
 OBSTACLE_Z_MAX_M = 0.80   # points above this are overhead clearance (free)
 GRID_CELL_SIZE_M = 0.20   # occupancy/frontier grid resolution
 INFLATE_CELLS = 2          # obstacle inflation radius in cells (~0.4 m safety margin)
 LIDAR_WARMUP_S = 2.0       # max seconds to wait for first LiDAR scan before planning
+FRONTIER_SIZE_WEIGHT = 3.0 # scales cluster-size bonus in the frontier cost function
+COLLISION_LOOKAHEAD_M = 0.6 # distance ahead the navigator probes for obstacles while driving
 
 _NEIGHBORS_4 = [(-1, 0), (1, 0), (0, -1), (0, 1)]
 _NEIGHBORS_8 = _NEIGHBORS_4 + [(-1, -1), (-1, 1), (1, -1), (1, 1)]
@@ -102,18 +107,36 @@ class OccupancyGrid:
         self,
         world_x: float,
         world_y: float,
-        half_w: float,
-        half_l: float,
+        yaw_deg: float,
+        range_m: float,
+        fov_h_deg: float,
     ) -> None:
-        """Mark the rectangular camera footprint centred at (world_x, world_y) as explored."""
-        x_lo = int(math.floor((world_x - half_w) / self.cell_size))
-        x_hi = int(math.ceil((world_x + half_w) / self.cell_size))
-        y_lo = int(math.floor((world_y - half_l) / self.cell_size))
-        y_hi = int(math.ceil((world_y + half_l) / self.cell_size))
+        """Mark the forward camera footprint as explored.
+
+        A forward-looking camera does not just see the cell at the robot — on the
+        ground it sees a fan-shaped region ahead that widens with distance. We
+        rasterise that fan by stepping forward along the heading and marking the
+        lateral spread (governed by the horizontal FOV) at each step.
+        """
+        yaw = math.radians(yaw_deg)
+        fx, fy = math.cos(yaw), math.sin(yaw)     # forward (heading) unit vector
+        lx, ly = -math.sin(yaw), math.cos(yaw)    # lateral unit vector
+        half_fov = math.radians(fov_h_deg / 2.0)
+        step = self.cell_size / 2.0               # < cell size so the raster has no gaps
         with self._lock:
-            for cx in range(x_lo, x_hi + 1):
-                for cy in range(y_lo, y_hi + 1):
-                    self._explored.add((cx, cy))
+            d = 0.0
+            while d <= range_m:
+                half_w = d * math.tan(half_fov)
+                offset = -half_w
+                while offset <= half_w:
+                    wx = world_x + fx * d + lx * offset
+                    wy = world_y + fy * d + ly * offset
+                    self._explored.add(
+                        (int(math.floor(wx / self.cell_size)),
+                         int(math.floor(wy / self.cell_size)))
+                    )
+                    offset += step
+                d += step
 
     def get_frontiers(
         self,
@@ -145,6 +168,19 @@ class OccupancyGrid:
     def grid_to_world(self, cx: int, cy: int) -> tuple[float, float]:
         half = self.cell_size / 2.0
         return (cx * self.cell_size + half, cy * self.cell_size + half)
+
+    # --- serialization ---
+
+    def export_state(self) -> dict:
+        """Thread-safe snapshot of the grid for publishing (occupied + explored cells)."""
+        with self._lock:
+            if self._dirty:
+                self._rebuild_inflated()
+            return {
+                "cell_size": self.cell_size,
+                "occupied": [[cx, cy] for cx, cy in self._inflated],
+                "explored": [[cx, cy] for cx, cy in self._explored],
+            }
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +274,30 @@ def _thin_path(path: list[tuple[int, int]]) -> list[tuple[int, int]]:
     return result
 
 
+def _cluster_frontiers(
+    frontiers: set[tuple[int, int]],
+) -> list[set[tuple[int, int]]]:
+    """Group frontier cells into connected clusters using 4-connectivity."""
+    remaining = set(frontiers)
+    clusters: list[set[tuple[int, int]]] = []
+    while remaining:
+        seed = next(iter(remaining))
+        cluster: set[tuple[int, int]] = set()
+        queue = [seed]
+        while queue:
+            cell = queue.pop()
+            if cell in remaining:
+                remaining.discard(cell)
+                cluster.add(cell)
+                cx, cy = cell
+                for dx, dy in _NEIGHBORS_4:
+                    nb = (cx + dx, cy + dy)
+                    if nb in remaining:
+                        queue.append(nb)
+        clusters.append(cluster)
+    return clusters
+
+
 # ---------------------------------------------------------------------------
 # Zenoh clients
 # ---------------------------------------------------------------------------
@@ -251,17 +311,25 @@ class ZenohLidarClient:
         router: str | None,
         grid: OccupancyGrid,
         warmup_s: float = LIDAR_WARMUP_S,
+        session: zenoh.Session | None = None,
     ) -> None:
         self._grid = grid
         self._warmup_s = warmup_s
         self._received = 0
         self._lock = threading.Lock()
 
-        conf = zenoh.Config()
-        if router:
-            conf.insert_json5("connect/endpoints", json.dumps([router]))
-        self._session = zenoh.open(conf)
+        if session is not None:
+            self._session = session
+            self._owns_session = False
+        else:
+            conf = zenoh.Config()
+            if router:
+                conf.insert_json5("connect/endpoints", json.dumps([router]))
+            logger.info("ZenohLidarClient: opening session → %s (topic=%s)", router, topic)
+            self._session = zenoh.open(conf)
+            self._owns_session = True
         self._sub = self._session.declare_subscriber(topic, self._on_lidar)
+        logger.info("ZenohLidarClient: subscribed to %s", topic)
 
     def _on_lidar(self, sample: zenoh.Sample) -> None:
         raw = json.loads(bytes(sample.payload).decode("utf-8"))
@@ -290,7 +358,8 @@ class ZenohLidarClient:
 
     def close(self) -> None:
         self._sub.undeclare()
-        self._session.close()
+        if self._owns_session:
+            self._session.close()
 
 
 class ZenohRobotLocalizationClient:
@@ -301,16 +370,22 @@ class ZenohRobotLocalizationClient:
         topic: str = "robodog/system_state/odometry",
         router: str | None = None,
         timeout_s: float = 2.0,
+        session: zenoh.Session | None = None,
     ) -> None:
         self.topic = topic
         self.timeout_s = timeout_s
         self.latest_pose: dict | None = None
 
-        conf = zenoh.Config()
-        if router:
-            conf.insert_json5("connect/endpoints", json.dumps([router]))
-        self._session = zenoh.open(conf)
+        if session is not None:
+            self._session = session
+        else:
+            conf = zenoh.Config()
+            if router:
+                conf.insert_json5("connect/endpoints", json.dumps([router]))
+            logger.info("ZenohRobotLocalizationClient: opening session → %s (topic=%s)", router, topic)
+            self._session = zenoh.open(conf)
         self._sub = self._session.declare_subscriber(topic, self._on_pose)
+        logger.info("ZenohRobotLocalizationClient: subscribed to %s", topic)
 
     def _on_pose(self, sample: zenoh.Sample) -> None:
         raw = json.loads(bytes(sample.payload).decode("utf-8"))
@@ -358,42 +433,95 @@ class PathPlannerAgent:
         lidar_client=None,
         grid_cell_size_m: float = GRID_CELL_SIZE_M,
         lidar_warmup_s: float = LIDAR_WARMUP_S,
+        session: zenoh.Session | None = None,
     ) -> None:
         from litter_detection.config import Settings
         cfg = Settings()
 
+        # Session used to publish the live occupancy grid to the dashboard.
+        # None when constructed standalone (e.g. unit tests) → publishing disabled.
+        self._publish_session = session
+        self._grid_topic = cfg.topic_occupancy_grid
+
+        logger.info("PathPlannerAgent: connecting to odometry topic …")
         self.localization_client = localization_client or ZenohRobotLocalizationClient(
             topic=cfg.topic_odometry,
             router=cfg.ZENOH_ROUTER,
+            session=session,
         )
 
         self._grid = OccupancyGrid(cell_size_m=grid_cell_size_m)
 
-        # Camera footprint half-extents derived from mounting geometry
-        h = cfg.CAMERA_HEIGHT_M
-        self._footprint_half_w = h * math.tan(math.radians(cfg.CAMERA_FOV_H_DEG / 2.0))
-        self._footprint_half_l = h * math.tan(math.radians(cfg.CAMERA_FOV_V_DEG / 2.0))
+        # Forward camera footprint: the camera looks ahead along the heading and
+        # sees a fan that widens with distance, reaching CAMERA_RANGE_M forward.
+        self._camera_fov_h_deg = cfg.CAMERA_FOV_H_DEG
+        self._camera_range_m = cfg.CAMERA_RANGE_M
 
         # Field origin stored on first NEXT_FRONTIER call
         self._field_origin: tuple[float, float] | None = None
 
         if lidar_client is None:
+            logger.info("PathPlannerAgent: connecting to LiDAR topic …")
             self._lidar_client: ZenohLidarClient | None = ZenohLidarClient(
                 topic=cfg.topic_lidar,
                 router=cfg.ZENOH_ROUTER,
                 grid=self._grid,
                 warmup_s=lidar_warmup_s,
+                session=session,
             )
         else:
             # Pass lidar_client=False to disable LiDAR (e.g. unit tests)
             self._lidar_client = lidar_client if lidar_client is not False else None
 
+        logger.info("PathPlannerAgent: ready (cell_size=%.2fm, camera range=%.2fm, fov_h=%.0f°)",
+                    grid_cell_size_m, self._camera_range_m, self._camera_fov_h_deg)
+
     # --- public API ---
+
+    def is_path_valid(self, waypoints: list[dict]) -> bool:
+        """Return False if any remaining waypoint cell is now inside an inflated obstacle."""
+        occupied = self._grid.snapshot()
+        for wp in waypoints:
+            cell = self._grid.world_to_grid(wp["x"], wp["y"])
+            if cell in occupied:
+                return False
+        return True
+
+    def is_forward_clear(
+        self, x: float, y: float, yaw_deg: float, lookahead_m: float = COLLISION_LOOKAHEAD_M
+    ) -> bool:
+        """Return False if an obstacle lies on the short stretch directly ahead.
+
+        Sampled against the live (LiDAR-updated, inflated) occupancy grid along the
+        robot's heading. Lets the navigator abort and re-plan before driving into a
+        wall the A* plan did not know about yet.
+        """
+        occupied = self._grid.snapshot()
+        yaw = math.radians(yaw_deg)
+        fx, fy = math.cos(yaw), math.sin(yaw)
+        step = self._grid.cell_size / 2.0
+        d = 0.0
+        while d <= lookahead_m:
+            if self._grid.world_to_grid(x + fx * d, y + fy * d) in occupied:
+                return False
+            d += step
+        return True
 
     def handle_request(self, request: dict) -> dict:
         if request.get("type") == "NEXT_FRONTIER":
             return self._next_frontier(request)
         return {"status": "error", "agent": "pathplanner", "message": "Unknown request type"}
+
+    def _publish_grid(self) -> None:
+        """Publish the live occupancy grid (occupied + explored) for the dashboard."""
+        if self._publish_session is None:
+            return
+        try:
+            self._publish_session.put(
+                self._grid_topic, json.dumps(self._grid.export_state()).encode()
+            )
+        except Exception:
+            logger.debug("PathPlannerAgent: could not publish occupancy grid", exc_info=True)
 
     # --- frontier logic ---
 
@@ -421,10 +549,10 @@ class PathPlannerAgent:
 
         origin_x, origin_y = self._field_origin
 
-        # Mark current camera footprint as explored
+        # Mark the forward camera footprint (fan ahead of the robot) as explored
         self._grid.mark_camera_footprint(
-            pose["x"], pose["y"],
-            self._footprint_half_w, self._footprint_half_l,
+            pose["x"], pose["y"], pose["theta_deg"],
+            self._camera_range_m, self._camera_fov_h_deg,
         )
 
         # Block until at least one LiDAR scan has been processed
@@ -432,6 +560,9 @@ class PathPlannerAgent:
             self._lidar_client.wait_for_scan()
 
         occupied = self._grid.snapshot()
+
+        # Push the updated grid (explored footprint + obstacles) to the dashboard
+        self._publish_grid()
 
         # Grid bounds (field + 2-cell margin)
         cell = self._grid.cell_size
@@ -447,7 +578,7 @@ class PathPlannerAgent:
         frontiers = self._grid.get_frontiers(x_bounds, y_bounds, occupied)
 
         if not frontiers:
-            print("PathPlannerAgent: no frontiers remaining — exploration complete")
+            logger.info("PathPlannerAgent: no frontiers remaining — exploration complete")
             return {"status": "completed", "agent": "pathplanner"}
 
         robot_cell = _nearest_free(
@@ -455,15 +586,24 @@ class PathPlannerAgent:
             occupied, x_bounds, y_bounds,
         )
 
-        # Try the 30 nearest frontier cells until one is reachable via A*
-        sorted_frontiers = sorted(
-            frontiers,
-            key=lambda c: math.hypot(c[0] - robot_cell[0], c[1] - robot_cell[1]),
-        )
+        # Cluster frontiers and score each cluster by size and distance.
+        # cost = distance_to_nearest_cell / log(1 + cluster_size * FRONTIER_SIZE_WEIGHT)
+        # Lower cost = better: prefer large, nearby frontier clusters.
+        clusters = _cluster_frontiers(frontiers)
+        scored: list[tuple[float, tuple[int, int]]] = []
+        for cluster in clusters:
+            nearest = min(
+                cluster,
+                key=lambda c: math.hypot(c[0] - robot_cell[0], c[1] - robot_cell[1]),
+            )
+            dist = math.hypot(nearest[0] - robot_cell[0], nearest[1] - robot_cell[1])
+            size_bonus = math.log(1.0 + len(cluster) * FRONTIER_SIZE_WEIGHT)
+            scored.append((dist / size_bonus, nearest))
+        scored.sort()
 
         path: list[tuple[int, int]] | None = None
         target_cell: tuple[int, int] | None = None
-        for candidate in sorted_frontiers[:30]:
+        for _cost, candidate in scored:
             p = _astar(robot_cell, candidate, occupied, x_bounds, y_bounds)
             if p is not None:
                 path = p
@@ -471,7 +611,7 @@ class PathPlannerAgent:
                 break
 
         if path is None or target_cell is None:
-            print("PathPlannerAgent: all frontiers unreachable — exploration complete")
+            logger.info("PathPlannerAgent: all frontiers unreachable — exploration complete")
             return {"status": "completed", "agent": "pathplanner"}
 
         # Remove collinear intermediate points to reduce navigator calls
@@ -482,9 +622,9 @@ class PathPlannerAgent:
             waypoints.append({"id": f"wp_{i}", "x": round(wx, 3), "y": round(wy, 3)})
 
         tx, ty = self._grid.grid_to_world(*target_cell)
-        print(
-            f"PathPlannerAgent: {len(frontiers)} frontiers → "
-            f"target ({tx:.2f}, {ty:.2f}), {len(waypoints)} waypoints"
+        logger.info(
+            "PathPlannerAgent: %d frontiers → target (%.2f, %.2f), %d waypoints",
+            len(frontiers), tx, ty, len(waypoints),
         )
 
         return {

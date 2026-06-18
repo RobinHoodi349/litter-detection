@@ -17,6 +17,7 @@ class DetectionResult(BaseModel):
     mask_shape: tuple[int, int]
     frame_height: int
     frame_width: int
+    bbox: tuple[int, int, int, int] | None = None  # (x1, y1, x2, y2) in original frame pixels
 
 
 class VerifiedDetection(BaseModel):

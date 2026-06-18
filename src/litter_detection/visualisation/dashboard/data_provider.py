@@ -17,6 +17,7 @@ from queue import Empty, Queue
 from threading import RLock, Thread
 from typing import Any, Protocol
 
+import cv2
 import numpy as np
 from PIL import Image
 
@@ -55,6 +56,7 @@ class ZenohDashboardSettings:
     topic_odometry: str = os.getenv("LITTER_TOPIC_ODOMETRY", "robodog/system_state/odometry")
     topic_lidar: str = os.getenv("LITTER_TOPIC_LIDAR", "robodog/sensors/go2_lidar")
     topic_obstacle: str = os.getenv("LITTER_TOPIC_OBSTACLE", "litter/obstacles")
+    topic_occupancy_grid: str = os.getenv("LITTER_TOPIC_OCCUPANCY_GRID", "litter/occupancy_grid")
     topic_robodog_command: str = os.getenv("LITTER_TOPIC_ROBODOG_COMMAND", "litter/robodog/command")
     topic_movement_command: str = os.getenv("LITTER_TOPIC_MOVEMENT_COMMAND", "robodog/command/motion/move")
 
@@ -78,6 +80,8 @@ class MapFrame:
     yaw_deg: float
     camera_obstacles: int = 0
     lidar_obstacles: int = 0
+    explored_cells: int = 0
+    explored_area_m2: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -152,6 +156,7 @@ class DashboardDataProvider(Protocol):
 
     def handle_control(self, action: str) -> str:
         """Execute or enqueue a robot control action."""
+            
 
     def handle_manual_control(self, direction: str, speed: float) -> str:
         """Execute or enqueue a manual controller movement."""
@@ -818,6 +823,10 @@ class ZenohDashboardDataProvider(QueueDashboardDataProvider):
         self._last_frame_received_at: float | None = None
         self._pose_history: deque[tuple[float, float]] = deque(maxlen=300)
         self._current_pose: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        # Live occupancy grid published by the PathPlannerAgent (single source of truth).
+        self._grid_cell_size: float = 0.0
+        self._grid_occupied: list[tuple[int, int]] = []
+        self._grid_explored: list[tuple[int, int]] = []
         self._real_home_pose: tuple[float, float, float] | None = None
         self._last_override_publish_at = 0.0
         self._override_publish_interval_s = 0.25
@@ -927,6 +936,7 @@ class ZenohDashboardDataProvider(QueueDashboardDataProvider):
                 session.declare_subscriber(self.settings.topic_odometry, self._on_odometry),
                 session.declare_subscriber(self.settings.topic_lidar, self._on_lidar),
                 session.declare_subscriber(self.settings.topic_obstacle, self._on_obstacle),
+                session.declare_subscriber(self.settings.topic_occupancy_grid, self._on_occupancy_grid),
             ]
             with self._lock:
                 self._session = session
@@ -997,6 +1007,30 @@ class ZenohDashboardDataProvider(QueueDashboardDataProvider):
         if frame is not None:
             self._last_overlay = frame
             self._safe_put(self.camera_queue, self._camera_frame(frame))
+
+    def _annotate_bbox(
+        self,
+        image: np.ndarray,
+        bbox: list[int],
+        src_w: int | None,
+        src_h: int | None,
+    ) -> np.ndarray:
+        """Draw a bounding-box rectangle on the (RGB) image, scaled to its display size."""
+        img = image.copy()
+        h, w = img.shape[:2]
+        x1, y1, x2, y2 = bbox
+        if src_w and src_h and (src_w != w or src_h != h):
+            x1 = int(x1 * w / src_w)
+            y1 = int(y1 * h / src_h)
+            x2 = int(x2 * w / src_w)
+            y2 = int(y2 * h / src_h)
+        # cv2 works on BGR-ordered arrays, but rectangle colour (0,255,0) is green in both orderings
+        cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), thickness=2, lineType=cv2.LINE_AA)
+        cv2.putText(
+            img, "litter", (x1, max(y1 - 6, 0)),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1, cv2.LINE_AA,
+        )
+        return img
 
     def _on_alert(self, sample: Any) -> None:
         payload = self._decode_json_sample(sample)
@@ -1090,6 +1124,31 @@ class ZenohDashboardDataProvider(QueueDashboardDataProvider):
         except Exception as exc:
             self._safe_put(self.log_queue, LogEntry(self._now(), "WARN", "lidar", f"Could not parse LiDAR: {exc}"))
 
+    def _on_occupancy_grid(self, sample: Any) -> None:
+        payload = self._decode_json_sample(sample)
+        if not payload:
+            return
+        try:
+            cell_size = self._float_value(payload.get("cell_size"), 0.0) or 0.0
+            occupied = [
+                (int(c[0]), int(c[1]))
+                for c in payload.get("occupied", [])
+                if isinstance(c, (list, tuple)) and len(c) == 2
+            ]
+            explored = [
+                (int(c[0]), int(c[1]))
+                for c in payload.get("explored", [])
+                if isinstance(c, (list, tuple)) and len(c) == 2
+            ]
+            with self._lock:
+                self._grid_cell_size = cell_size
+                self._grid_occupied = occupied
+                self._grid_explored = explored
+                frame = self._render_map_frame()
+            self._safe_put(self.map_queue, frame)
+        except Exception as exc:
+            self._safe_put(self.log_queue, LogEntry(self._now(), "WARN", "mapping", f"Could not parse occupancy grid: {exc}"))
+
     def _camera_frame(self, image: np.ndarray) -> CameraFrame:
         now = time.monotonic()
         fps = 0.0
@@ -1104,6 +1163,9 @@ class ZenohDashboardDataProvider(QueueDashboardDataProvider):
             x_m, y_m, yaw_deg = self._current_pose
             points = list(self._pose_history)
             obstacles = self._current_obstacles()
+            grid_cell_size = self._grid_cell_size
+            grid_explored = list(self._grid_explored)
+            grid_occupied = list(self._grid_occupied)
 
         size = 520
         image = np.full((size, size, 3), 245, dtype=np.uint8)
@@ -1111,6 +1173,10 @@ class ZenohDashboardDataProvider(QueueDashboardDataProvider):
         image[:, ::40, :] = 226
         center = size // 2
         scale = 40
+
+        # Real occupancy grid (explored footprint + obstacles) drawn underneath
+        # everything else so the path, robot and markers stay readable on top.
+        self._draw_occupancy_grid(image, center, scale, grid_cell_size, grid_explored, grid_occupied)
 
         for x, y in points:
             px = center + int(x * scale)
@@ -1131,6 +1197,8 @@ class ZenohDashboardDataProvider(QueueDashboardDataProvider):
         self._draw_litter_markers(image, center, scale, list(self._litter_markers))
 
         camera_count, lidar_count = self._obstacle_source_counts(obstacles)
+        explored_cells = len(grid_explored)
+        explored_area_m2 = explored_cells * grid_cell_size * grid_cell_size
         return MapFrame(
             image=image,
             x_m=x_m,
@@ -1138,7 +1206,43 @@ class ZenohDashboardDataProvider(QueueDashboardDataProvider):
             yaw_deg=yaw_deg,
             camera_obstacles=camera_count,
             lidar_obstacles=lidar_count,
+            explored_cells=explored_cells,
+            explored_area_m2=explored_area_m2,
         )
+
+    def _draw_occupancy_grid(
+        self,
+        image: np.ndarray,
+        center: int,
+        scale: int,
+        cell_size: float,
+        explored: list[tuple[int, int]],
+        occupied: list[tuple[int, int]],
+    ) -> None:
+        """Render the planner's occupancy grid: explored area (light) + obstacles (dark)."""
+        if cell_size <= 0.0:
+            return
+        half = cell_size / 2.0
+        cell_px = max(1, int(round(cell_size * scale)))
+        explored_color = [201, 231, 207]  # light green — area the robodog has seen
+        occupied_color = [55, 65, 81]      # dark slate — obstacle cells from the real grid
+        for cells, color in ((explored, explored_color), (occupied, occupied_color)):
+            for cx, cy in cells:
+                wx = cx * cell_size + half
+                wy = cy * cell_size + half
+                px = center + int(wx * scale)
+                py = center - int(wy * scale)
+                self._fill_cell(image, px, py, cell_px, color)
+
+    @staticmethod
+    def _fill_cell(image: np.ndarray, px: int, py: int, size_px: int, color: list[int]) -> None:
+        half = size_px // 2
+        y0 = max(py - half, 0)
+        y1 = min(py + half + 1, image.shape[0])
+        x0 = max(px - half, 0)
+        x1 = min(px + half + 1, image.shape[1])
+        if y1 > y0 and x1 > x0:
+            image[y0:y1, x0:x1] = color
 
     def _publish_stop_command(self, session: Any) -> None:
         from litter_detection.agent.models import MovementCommand, MovementSource

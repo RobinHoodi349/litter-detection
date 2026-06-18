@@ -35,7 +35,9 @@ class LitterDetector:
         checkpoint = PROJECT_ROOT / settings.MODEL_NAME
         if not checkpoint.exists():
             raise FileNotFoundError(f"Model checkpoint not found: {checkpoint}")
-        model = settings.MODEL_CLASS(dropout=settings.DROPOUT).to(self._device)
+        # pretrained=False: the checkpoint below supplies all weights, so we
+        # avoid the ImageNet backbone download (fails on an offline Jetson).
+        model = settings.MODEL_CLASS(dropout=settings.DROPOUT, pretrained=False).to(self._device)
         model.load_state_dict(torch.load(checkpoint, map_location=self._device))
         model.eval()
         n = sum(p.numel() for p in model.parameters())
@@ -139,6 +141,19 @@ class LitterDetector:
         mask_binary = (mask_probs > settings.THRESHOLD).astype(np.uint8)
         coverage = float(mask_binary.mean())
 
+        # Compute tight bounding box in original frame coordinates
+        mask_frame = cv2.resize(mask_binary, (frame_w, frame_h), interpolation=cv2.INTER_NEAREST)
+        rows = np.any(mask_frame, axis=1)
+        cols = np.any(mask_frame, axis=0)
+        if rows.any() and cols.any():
+            y_idx = np.where(rows)[0]
+            x_idx = np.where(cols)[0]
+            bbox: tuple[int, int, int, int] | None = (
+                int(x_idx[0]), int(y_idx[0]), int(x_idx[-1]), int(y_idx[-1])
+            )
+        else:
+            bbox = None
+
         result = DetectionResult(
             timestamp=time.time(),
             litter_detected=coverage > settings.LITTER_COVERAGE_THRESHOLD,
@@ -146,6 +161,26 @@ class LitterDetector:
             mask_shape=(int(mask_binary.shape[0]), int(mask_binary.shape[1])),
             frame_height=frame_h,
             frame_width=frame_w,
+            bbox=bbox,
         )
         annotated_frame = self._overlay_mask(frame_bytes, mask_binary, frame_h, frame_w)
         return result, annotated_frame
+
+
+def crop_to_detection(
+    frame_bytes: bytes,
+    bbox: tuple[int, int, int, int],
+    frame_h: int,
+    frame_w: int,
+    padding_px: int = 40,
+) -> bytes:
+    """Crop frame to the detected litter region with padding, re-encoded as JPEG."""
+    x1, y1, x2, y2 = bbox
+    x1 = max(0, x1 - padding_px)
+    y1 = max(0, y1 - padding_px)
+    x2 = min(frame_w - 1, x2 + padding_px)
+    y2 = min(frame_h - 1, y2 + padding_px)
+    img = cv2.imdecode(np.frombuffer(frame_bytes, np.uint8), cv2.IMREAD_COLOR)
+    crop = img[y1 : y2 + 1, x1 : x2 + 1]
+    _, encoded = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    return encoded.tobytes()

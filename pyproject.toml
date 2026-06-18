@@ -2,7 +2,8 @@
 name = "litter-detection"
 version = "0.1.0"
 description = "Autonomous CNN training for litter segmentation"
-requires-python = ">=3.11"
+# Pinned to 3.11: the vendored Jetson torch wheels are cp311-only (vendor/jetson-wheels).
+requires-python = ">=3.11,<3.12"
 dependencies = [
     "torch>=2.3.0",
     "torchvision>=0.18.0",
@@ -36,9 +37,17 @@ name = "pytorch"
 url = "https://download.pytorch.org/whl/cu121"
 explicit = true
 
+# Desktops (Windows AMD64 / Linux x86_64) use the cu121 wheels; the Jetson
+# (aarch64) uses the vendored NVIDIA JetPack wheels under vendor/jetson-wheels.
 [tool.uv.sources]
-torch = { index = "pytorch" }
-torchvision = { index = "pytorch" }
+torch = [
+    { index = "pytorch", marker = "platform_machine != 'aarch64'" },
+    { path = "vendor/jetson-wheels/torch-2.4.0a0+gitd990dad-cp311-cp311-linux_aarch64.whl", marker = "platform_machine == 'aarch64'" },
+]
+torchvision = [
+    { index = "pytorch", marker = "platform_machine != 'aarch64'" },
+    { path = "vendor/jetson-wheels/torchvision-0.19.0a0+48b1edf-cp311-cp311-linux_aarch64.whl", marker = "platform_machine == 'aarch64'" },
+]
 
 [build-system]
 requires = ["uv_build>=0.8.4,<0.9.0"]
