@@ -29,6 +29,21 @@ OBSTACLE_Z_MIN_M = 0.05
 OBSTACLE_Z_MAX_M = 0.80
 
 
+def pick_detection_image(overlay, camera, fallback):
+    """Choose the image stored for a detection.
+
+    Prefers the model's annotated overlay (the recognised mask) so the
+    validation view shows *what the model detected*, then the raw camera
+    frame, then a placeholder. Inputs are typically ``np.ndarray`` or ``None``.
+    """
+
+    if overlay is not None:
+        return overlay
+    if camera is not None:
+        return camera
+    return fallback
+
+
 @dataclass(frozen=True)
 class ZenohDashboardSettings:
     """Lightweight Zenoh settings for the dashboard runtime."""
@@ -168,6 +183,9 @@ class QueueDashboardDataProvider:
         self._status = RobotStatus(self.config.initial_mode, 87, True)
         self._last_camera: CameraFrame | None = None
         self._last_map: MapFrame | None = None
+        # Latest annotated model overlay (recognised mask), used as the image
+        # shown for a detection so the validation view reflects the model output.
+        self._last_overlay: np.ndarray | None = None
         self._has_real_camera = False
         self._has_real_map = False
         self._started_at = time.monotonic()
@@ -350,9 +368,31 @@ class QueueDashboardDataProvider:
         )
 
     def _mock_detection(self, label: str, confidence: float, index: int) -> TrashDetection:
-        image = np.full((160, 220, 3), [26, 45, 90], dtype=np.uint8)
-        image[35 + index * 10 : 105 + index * 10, 70:150] = [236, 205, 70]
+        image = self._mock_overlay_image(index)
         return TrashDetection(image=image, label=label, confidence=confidence, timestamp=self._now(), position=f"x={1.2 + index:.1f}m, y={0.8 + index * 0.4:.1f}m")
+
+    @staticmethod
+    def _mock_overlay_image(index: int) -> np.ndarray:
+        """Mock 'model overlay': a camera-like scene with a blended red mask.
+
+        Mirrors the real detector overlay so the validation view shows what the
+        model would have recognised even when running on mock data.
+        """
+
+        h, w = 200, 280
+        image = np.empty((h, w, 3), dtype=np.uint8)
+        image[..., 0] = 58
+        image[..., 1] = 82
+        image[..., 2] = 70
+        # The detected litter object.
+        y0 = 55 + index * 14
+        x0 = 92
+        image[y0 : y0 + 78, x0 : x0 + 96] = [158, 146, 120]
+        # Model mask overlay (red), blended over the recognised region.
+        mask_region = image[y0 + 8 : y0 + 70, x0 + 8 : x0 + 88].astype(np.float32)
+        red = np.array([220, 40, 40], dtype=np.float32)
+        image[y0 + 8 : y0 + 70, x0 + 8 : x0 + 88] = (0.55 * mask_region + 0.45 * red).astype(np.uint8)
+        return image
 
     def _mock_log(self, level: str, source: str, message: str) -> LogEntry:
         return LogEntry(timestamp=self._now(), level=level, source=source, message=message)
@@ -951,8 +991,11 @@ class ZenohDashboardDataProvider(QueueDashboardDataProvider):
             self._safe_put(self.camera_queue, self._camera_frame(frame))
 
     def _on_visualization(self, sample: Any) -> None:
+        # The visualization topic carries the detector's annotated overlay
+        # (camera frame with the recognised litter mask drawn on top).
         frame = self._decode_image_sample(sample)
         if frame is not None:
+            self._last_overlay = frame
             self._safe_put(self.camera_queue, self._camera_frame(frame))
 
     def _on_alert(self, sample: Any) -> None:
@@ -966,7 +1009,9 @@ class ZenohDashboardDataProvider(QueueDashboardDataProvider):
         label = description[:48] if description else "litter"
         if coverage is not None:
             label = f"{label} ({float(coverage):.1%})"
-        image = self._last_camera.image if self._last_camera is not None else self._mock_detection("litter", confidence, 0).image
+        camera_image = self._last_camera.image if self._last_camera is not None else None
+        fallback_image = self._mock_detection("litter", confidence, 0).image
+        image = pick_detection_image(self._last_overlay, camera_image, fallback_image)
         position = self._position_text(payload)
         detection = TrashDetection(
             image=image,

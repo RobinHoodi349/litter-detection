@@ -15,6 +15,8 @@ from litter_detection.visualisation.dashboard.panels.control import ControlPanel
 from litter_detection.visualisation.dashboard.panels.logs import LogsPanel
 from litter_detection.visualisation.dashboard.panels.map import MapPanel
 from litter_detection.visualisation.dashboard.panels.trash import TrashPanel
+from litter_detection.visualisation.dashboard.panels.validation import ValidationPanel
+from litter_detection.visualisation.dashboard.panels.validation_logic import Verdict
 
 
 # ---------------------------------------------------------------------------
@@ -89,7 +91,7 @@ footer,
 /* ---- Root frame: uniform, calm, one continuous control surface ---- */
 .dashboard-root {
     position: fixed;
-    top: 12px;
+    top: 54px;
     right: 12px;
     bottom: 12px;
     left: 12px;
@@ -763,9 +765,222 @@ footer,
     border-color: rgba(239, 68, 68, 0.65) !important;
 }
 
+/* ---- Tab navigation ---- */
+.app-tabs {
+    background: transparent !important;
+    border: 0 !important;
+}
+.app-tabs > .tab-nav,
+.app-tabs .tab-nav {
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    right: 12px;
+    z-index: 50;
+    border: 1px solid var(--border) !important;
+    border-radius: 10px;
+    background: linear-gradient(180deg, var(--bg-panel), var(--bg-panel-2)) !important;
+    padding: 0 6px !important;
+    gap: 4px;
+    min-height: 36px;
+}
+.app-tabs .tab-nav button {
+    color: var(--text-muted) !important;
+    font-family: var(--font-tech);
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    font-size: clamp(0.7rem, 1.1vh, 0.84rem);
+    border: 0 !important;
+    background: transparent !important;
+    padding: 7px 16px !important;
+}
+.app-tabs .tab-nav button.selected {
+    color: var(--text-head) !important;
+    border-bottom: 2px solid var(--blue) !important;
+    text-shadow: 0 0 12px rgba(76, 141, 255, 0.5);
+}
+
+/* ---- Validation tab ---- */
+.validation-root {
+    position: fixed;
+    top: 54px;
+    right: 12px;
+    bottom: 12px;
+    left: 12px;
+    padding: 12px;
+    border: 1px solid var(--border-strong);
+    border-radius: 16px;
+    box-sizing: border-box;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 12px;
+    overflow: hidden;
+    background:
+        radial-gradient(1100px 680px at 8% 2%, rgba(76, 141, 255, 0.18), transparent 60%),
+        radial-gradient(1050px 700px at 98% 100%, rgba(167, 139, 250, 0.16), transparent 62%),
+        var(--bg-app);
+    box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.06), 0 24px 60px rgba(0, 0, 0, 0.45);
+}
+.val-stats { width: 100%; }
+.val-stat-row {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 10px;
+}
+.val-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 9px 6px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: linear-gradient(180deg, rgba(16, 23, 40, 0.8), rgba(10, 15, 29, 0.86));
+}
+.val-stat .val-num {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: clamp(1.1rem, 2.4vh, 1.7rem);
+    color: var(--text-head);
+    line-height: 1;
+}
+.val-stat .val-num.ok { color: var(--blue); }
+.val-stat .val-num.no { color: var(--danger); }
+.val-stat .val-num.unsure { color: var(--gold); }
+.val-stat.val-precision { border-color: rgba(245, 185, 74, 0.5); }
+.val-stat.val-precision .val-num { color: var(--gold); text-shadow: 0 0 14px rgba(245, 185, 74, 0.4); }
+.val-stat .val-lbl {
+    font-size: clamp(0.6rem, 0.92vh, 0.72rem);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+}
+.val-body {
+    min-height: 0;
+    gap: 12px !important;
+    align-items: stretch;
+}
+.val-body > * { min-height: 0; }
+.val-current, .val-side {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 10px 12px;
+    background: linear-gradient(180deg, rgba(16, 23, 40, 0.8), rgba(10, 15, 29, 0.86));
+    overflow: hidden;
+}
+.val-current { display: flex; flex-direction: column; gap: 9px; }
+.val-img-cap-block { min-height: 0 !important; padding: 0 !important; }
+.val-img-cap {
+    font-family: var(--font-mono);
+    font-size: clamp(0.6rem, 0.92vh, 0.72rem);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--text-muted);
+}
+.val-img-cap::before {
+    content: "";
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    margin-right: 7px;
+    border-radius: 2px;
+    background: var(--danger);
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.8);
+    vertical-align: middle;
+}
+.val-image,
+.val-image > div,
+.val-image .image-container,
+.val-image [data-testid="image"],
+.val-image [data-testid="image"] > div {
+    height: clamp(180px, calc(58dvh - 150px), 460px) !important;
+    min-height: 0 !important;
+    background: var(--bg-inset) !important;
+    border-radius: 8px;
+}
+.val-image { border: 1px solid var(--border); border-radius: 8px; overflow: hidden !important; }
+.val-image img { height: 100% !important; max-height: 100% !important; object-fit: contain; }
+.val-meta-grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 4px 14px;
+    font-family: var(--font-mono);
+    font-size: clamp(0.74rem, 1.04vh, 0.86rem);
+}
+.val-meta-grid span { color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.86em; }
+.val-meta-grid strong { color: var(--text-head); }
+.val-meta-grid strong.verdict-ok { color: var(--blue); }
+.val-meta-grid strong.verdict-no { color: var(--danger); }
+.val-meta-grid strong.verdict-unsure { color: var(--gold); }
+.val-meta-grid strong.verdict-pending { color: var(--text-muted); }
+.val-meta-empty { color: var(--text-muted); font-style: italic; padding: 12px 0; }
+.val-buttons { gap: 8px !important; margin-top: auto; }
+.val-btn button {
+    width: 100% !important;
+    min-height: clamp(34px, 5vh, 46px) !important;
+    font-family: var(--font-tech);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    border-radius: 9px !important;
+    border: 1px solid var(--border-strong) !important;
+    background: linear-gradient(180deg, #161f33, #0e1626) !important;
+    color: var(--text-head) !important;
+    transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+.val-ok button {
+    border-color: rgba(76, 141, 255, 0.6) !important;
+    background: linear-gradient(180deg, rgba(76, 141, 255, 0.22), rgba(76, 141, 255, 0.08)) !important;
+}
+.val-ok button:hover { box-shadow: 0 0 0 1px rgba(76, 141, 255, 0.45), 0 0 16px rgba(76, 141, 255, 0.4) !important; }
+.val-no button {
+    border-color: rgba(239, 68, 68, 0.65) !important;
+    background: linear-gradient(180deg, rgba(239, 68, 68, 0.22), rgba(239, 68, 68, 0.08)) !important;
+}
+.val-no button:hover { box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.5), 0 0 16px rgba(239, 68, 68, 0.4) !important; }
+.val-unsure button {
+    border-color: rgba(245, 185, 74, 0.6) !important;
+    background: linear-gradient(180deg, rgba(245, 185, 74, 0.2), rgba(245, 185, 74, 0.07)) !important;
+}
+.val-unsure button:hover { box-shadow: 0 0 0 1px rgba(245, 185, 74, 0.45), 0 0 16px rgba(245, 185, 74, 0.4) !important; }
+.val-export button {
+    width: 100% !important;
+    opacity: 0.5;
+    font-family: var(--font-mono);
+    border: 1px dashed var(--border-strong) !important;
+    background: transparent !important;
+}
+.val-side { display: flex; flex-direction: column; gap: 8px; }
+.val-filter { background: transparent !important; border: 0 !important; }
+.val-filter label, .val-filter span { color: var(--text-muted) !important; }
+.val-gallery {
+    flex: 1 1 auto;
+    min-height: 0 !important;
+    height: auto !important;
+    overflow-y: auto !important;
+    scrollbar-width: thin;
+    background: var(--bg-inset) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 8px;
+    padding: 4px;
+}
+.val-gallery .thumbnail-item,
+.val-gallery .grid-wrap > div {
+    border: 1px solid var(--border) !important;
+    border-radius: 8px !important;
+    background: var(--bg-panel) !important;
+}
+.val-gallery .caption,
+.val-gallery figcaption {
+    font-family: var(--font-mono) !important;
+    font-size: clamp(0.6rem, 0.9vh, 0.7rem) !important;
+    color: #cfe0ff !important;
+    background: rgba(6, 10, 20, 0.82) !important;
+}
+
 @media (max-height: 760px) {
     .dashboard-root {
-        top: 8px;
+        top: 50px;
         right: 8px;
         bottom: 8px;
         left: 8px;
@@ -808,7 +1023,7 @@ footer,
 }
 @media (max-width: 900px) {
     .dashboard-root {
-        top: 6px;
+        top: 48px;
         right: 6px;
         bottom: 6px;
         left: 6px;
@@ -843,37 +1058,51 @@ def build_dashboard(
     trash_panel = TrashPanel(provider)
     logs_panel = LogsPanel(provider)
     control_panel = ControlPanel(provider, config)
+    validation_panel = ValidationPanel(provider)
 
     with gr.Blocks(title="Robodog Litter Detection Dashboard") as app:
-        with gr.Column(elem_classes=["dashboard-root"]):
-            gr.HTML(
-                "<div class='app-header'>"
-                "<div class='brand'>"
-                "<span class='brand-mark'></span>"
-                "<span class='brand-name'>The<span class='accent'>BlackBox</span>Society</span>"
-                "</div>"
-                "<div class='app-sub'><span class='led ok'></span>Robodog · Litter Detection Control</div>"
-                "</div>",
-                elem_classes=["app-header-block"],
-            )
-            with gr.Row(elem_classes=["top-row"], equal_height=True):
-                with gr.Column(scale=1):
-                    camera_outputs = camera_panel.render()
-                with gr.Column(scale=1):
-                    map_outputs = map_panel.render()
+        with gr.Tabs(elem_classes=["app-tabs"]):
+            with gr.Tab("Betrieb"):
+                with gr.Column(elem_classes=["dashboard-root"]):
+                    gr.HTML(
+                        "<div class='app-header'>"
+                        "<div class='brand'>"
+                        "<span class='brand-mark'></span>"
+                        "<span class='brand-name'>The<span class='accent'>BlackBox</span>Society</span>"
+                        "</div>"
+                        "<div class='app-sub'><span class='led ok'></span>Robodog · Litter Detection Control</div>"
+                        "</div>",
+                        elem_classes=["app-header-block"],
+                    )
+                    with gr.Row(elem_classes=["top-row"], equal_height=True):
+                        with gr.Column(scale=1):
+                            camera_outputs = camera_panel.render()
+                        with gr.Column(scale=1):
+                            map_outputs = map_panel.render()
 
-            with gr.Row(elem_classes=["bottom-row"], equal_height=True):
-                with gr.Column(scale=1):
-                    trash_outputs = trash_panel.render()
-                with gr.Column(scale=1):
-                    log_level, log_count, log_html = logs_panel.render()
-                with gr.Column(scale=1):
-                    control_components = control_panel.render()
+                    with gr.Row(elem_classes=["bottom-row"], equal_height=True):
+                        with gr.Column(scale=1):
+                            trash_outputs = trash_panel.render()
+                        with gr.Column(scale=1):
+                            log_level, log_count, log_html = logs_panel.render()
+                        with gr.Column(scale=1):
+                            control_components = control_panel.render()
+
+            with gr.Tab("Validierung"):
+                validation = validation_panel.render()
 
         status_output = control_components.status
         command_output = control_components.command_output
         map_file = control_components.map_file
         manual_group = control_components.manual_group
+
+        validation_outputs = [
+            validation.stats,
+            validation.image,
+            validation.meta,
+            validation.gallery,
+            validation.current_key,
+        ]
 
         timer = gr.Timer(config.refresh_interval_s)
         timer.tick(camera_panel.update, outputs=camera_outputs)
@@ -881,6 +1110,34 @@ def build_dashboard(
         timer.tick(trash_panel.update, outputs=trash_outputs)
         timer.tick(logs_panel.update, inputs=[log_level], outputs=[log_count, log_html])
         timer.tick(control_panel.status_update, outputs=[status_output, manual_group])
+        timer.tick(
+            validation_panel.refresh,
+            inputs=[validation.current_key, validation.filter],
+            outputs=validation_outputs,
+        )
+
+        for verdict, button in (
+            (Verdict.CORRECT, validation.button_correct),
+            (Verdict.INCORRECT, validation.button_incorrect),
+            (Verdict.UNSURE, validation.button_unsure),
+        ):
+            button.click(
+                lambda current_key, filter_mode, verdict=verdict: validation_panel.vote(
+                    verdict, current_key, filter_mode
+                ),
+                inputs=[validation.current_key, validation.filter],
+                outputs=validation_outputs,
+            )
+        validation.filter.change(
+            validation_panel.on_filter,
+            inputs=[validation.filter, validation.current_key],
+            outputs=validation_outputs,
+        )
+        validation.gallery.select(
+            validation_panel.on_select,
+            inputs=[validation.filter],
+            outputs=validation_outputs,
+        )
 
         log_level.change(logs_panel.update, inputs=[log_level], outputs=[log_count, log_html])
         for label, button in control_components.action_buttons.items():
@@ -900,6 +1157,11 @@ def build_dashboard(
         app.load(trash_panel.update, outputs=trash_outputs)
         app.load(logs_panel.update, inputs=[log_level], outputs=[log_count, log_html])
         app.load(control_panel.status_update, outputs=[status_output, manual_group])
+        app.load(
+            validation_panel.refresh,
+            inputs=[validation.current_key, validation.filter],
+            outputs=validation_outputs,
+        )
 
     return app
 

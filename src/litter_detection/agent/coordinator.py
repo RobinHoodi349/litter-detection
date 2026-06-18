@@ -26,7 +26,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from litter_detection.config import Settings
-from litter_detection.agent.actions import block_movement, publish_zenoh_alert
+from litter_detection.agent.actions import (
+    block_movement,
+    publish_detection_overlay,
+    publish_zenoh_alert,
+)
 from litter_detection.agent.detector import LitterDetector
 from litter_detection.agent.exploreAgent import ExploreAgent
 from litter_detection.agent.models import VerifiedDetection, VerifierDeps
@@ -136,6 +140,7 @@ class MissionCoordinator:
                         f"Detector: litter confirmed "
                         f"(confidence={verified.confidence}): {verified.description}"
                     )
+                    await publish_detection_overlay(self.session, annotated_frame)
                     await publish_zenoh_alert(self.session, result, verified)
                 else:
                     verified = VerifiedDetection(
@@ -147,6 +152,7 @@ class MissionCoordinator:
                         f"Detector: litter detected "
                         f"(coverage={result.pixel_coverage:.2%}) — verifier disabled"
                     )
+                    await publish_detection_overlay(self.session, annotated_frame)
                     await publish_zenoh_alert(self.session, result, verified)
 
                 last_alert_time = time.time()
