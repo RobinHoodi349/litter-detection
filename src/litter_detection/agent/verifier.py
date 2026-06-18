@@ -1,5 +1,6 @@
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.output import PromptedOutput
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from litter_detection.config import Settings
@@ -13,7 +14,10 @@ vision_model = OpenAIChatModel(settings.VISION_MODEL_NAME, provider=provider)
 verifier_agent = Agent(
     vision_model,
     deps_type=VerifierDeps,
-    output_type=VerifiedDetection,
+    # qwen2.5vl:3b (Ollama) supports no tool calling, so we cannot use the default
+    # tool-based structured output. PromptedOutput instructs the model to emit JSON
+    # and parses it instead — works with any model.
+    output_type=PromptedOutput(VerifiedDetection),
     system_prompt=(
         "You are a litter detection quality controller for an autonomous robot dog "
         "patrolling an outdoor area.\n\n"
