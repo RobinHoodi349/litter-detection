@@ -24,6 +24,7 @@ async def publish_zenoh_alert(
         "mask_shape": list(detection.mask_shape),
         "frame_height": detection.frame_height,
         "frame_width": detection.frame_width,
+        "bbox": list(detection.bbox) if detection.bbox is not None else None,
         "verified_by_llm": True,
         "confidence": verified.confidence,
         "description": verified.description,

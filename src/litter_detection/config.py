@@ -1,7 +1,7 @@
 '''Configuration for the Litter Detector application'''
 from pathlib import Path
 from dataclasses import dataclass
-from litter_detection.training.train import *
+from litter_detection.training.train import EfficientNetB1UNet
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -25,16 +25,19 @@ class Settings:
     topic_visualization:str = "litter/visualization"
     topic_alert:str = "litter/alert"
     topic_obstacle:str = "litter/obstacles"
+    topic_occupancy_grid:str = "litter/occupancy_grid"
     topic_robodog_command:str = "litter/robodog/command"
     topic_movement_blocked:str = "litter/movement_blocked"
     topic_odometry:str = "robodog/system_state/odometry"
     topic_lidar:str = "robodog/sensors/go2_lidar"
     topic_movement_command:str = "robodog/command/motion/move"
+    topic_estop:str = "robodog/command/motion/estop"
 
     # Camera geometry (used by PathPlannerAgent to compute coverage footprint)
     CAMERA_HEIGHT_M: float = 0.5        # mounting height above ground [m]
     CAMERA_FOV_H_DEG: float = 90.0     # horizontal field of view [degrees]
     CAMERA_FOV_V_DEG: float = 60.0     # vertical field of view [degrees]
+    CAMERA_RANGE_M: float = 2.0        # how far ahead the camera sees on the ground [m]
     CAMERA_COVERAGE_OVERLAP: float = 0.20  # min. overlap between adjacent footprints
 
     # Vision verifier model (must support image input, e.g. llava, moondream)
@@ -42,6 +45,10 @@ class Settings:
     USE_VERIFIER: bool = True
     # Seconds to ignore new detections after an alert (avoids re-triggering on same litter)
     ALERT_COOLDOWN_S: float = 10.0
+    # Max seconds to wait for Ollama response before giving up
+    VERIFIER_TIMEOUT_S: float = 15.0
+    # Min seconds between consecutive inference calls (rate-limits CNN load on laptop)
+    INFERENCE_MIN_INTERVAL_S: float = 1.0
 
     # OpenTelemetry setup
     SERVICE_NAME:str = "litter-detector"

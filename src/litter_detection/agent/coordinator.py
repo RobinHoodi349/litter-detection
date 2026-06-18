@@ -27,7 +27,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from litter_detection.config import Settings
 from litter_detection.agent.actions import block_movement, publish_zenoh_alert
-from litter_detection.agent.detector import LitterDetector
+from litter_detection.agent.detector import LitterDetector, crop_to_detection
 from litter_detection.agent.exploreAgent import ExploreAgent
 from litter_detection.agent.models import VerifiedDetection, VerifierDeps
 from litter_detection.agent.verifier import verifier_agent
@@ -53,8 +53,30 @@ class MissionCoordinator:
         self.session = session
         self.field_size = field_size
         self.lane_spacing_m = lane_spacing_m
-        self.explore_agent = ExploreAgent()
+        self.explore_agent = ExploreAgent(session=session)
         self._explore_done = threading.Event()
+
+    # ------------------------------------------------------------------
+    # Dashboard command handler
+    # ------------------------------------------------------------------
+
+    def _on_dashboard_command(self, sample: zenoh.Sample) -> None:
+        """Handle control commands published by the dashboard."""
+        try:
+            payload = json.loads(bytes(sample.payload).decode())
+        except Exception:
+            logger.warning("Coordinator: could not parse dashboard command payload")
+            return
+        action = payload.get("action", "")
+        logger.info("Coordinator: dashboard command received — action=%s", action)
+        if action == "stop":
+            self.explore_agent.stop_exploration()
+            self.session.publish(settings.topic_robodog_command, json.dumps({"command": "stop"}).encode())
+            self._explore_done.set()
+        elif action == "manual_override":
+            self.explore_agent.handle_request({"type": "BLOCK", "reason": "manual_override"})
+        elif action == "start_autonomous":
+            self.explore_agent.handle_request({"type": "UNBLOCK"})
 
     # ------------------------------------------------------------------
     # Exploration thread
@@ -86,12 +108,17 @@ class MissionCoordinator:
         detector.start()
         logger.info("Coordinator: detector ready — listening for frames on %s", settings.topic_frame)
         last_alert_time: float = 0.0
+        last_inference_time: float = 0.0
 
         try:
             while True:
                 frame = await loop.run_in_executor(None, detector.next_frame)
                 if frame is None:
                     continue
+
+                if time.time() - last_inference_time < settings.INFERENCE_MIN_INTERVAL_S:
+                    continue
+                last_inference_time = time.time()
 
                 frame_bytes, frame_h, frame_w = frame
                 result, annotated_frame = await loop.run_in_executor(
@@ -106,29 +133,45 @@ class MissionCoordinator:
                     continue
 
                 if settings.USE_VERIFIER:
-                    verify_image = (
-                        annotated_frame if annotated_frame is not None else frame_bytes
-                    )
+                    if annotated_frame is not None and result.bbox is not None:
+                        verify_image = crop_to_detection(
+                            annotated_frame, result.bbox, result.frame_height, result.frame_width
+                        )
+                    else:
+                        verify_image = annotated_frame if annotated_frame is not None else frame_bytes
                     logger.info(
                         f"Detector: ML flagged litter "
                         f"(coverage={result.pixel_coverage:.2%}) — verifying"
                     )
                     try:
-                        verifier_result = await verifier_agent.run(
-                            [
-                                BinaryContent(data=verify_image, media_type="image/jpeg"),
-                                (
-                                    f"The segmentation model detected potential litter covering "
-                                    f"{result.pixel_coverage:.2%} of this frame "
-                                    f"({result.frame_width}x{result.frame_height} px). "
-                                    "Red-highlighted pixels show what the model flagged. "
-                                    "Please confirm whether the highlighted area actually contains litter."
-                                ),
-                            ],
-                            deps=VerifierDeps(detection=result),
+                        verifier_result = await asyncio.wait_for(
+                            verifier_agent.run(
+                                [
+                                    BinaryContent(data=verify_image, media_type="image/jpeg"),
+                                    (
+                                        f"The ML segmentation model flagged a region covering "
+                                        f"{result.pixel_coverage:.2%} of the original camera frame. "
+                                        "This image is a cropped view of that region — red pixels mark "
+                                        "exactly what the model detected. "
+                                        "Does the red-highlighted area contain actual litter? "
+                                        "Reject if it looks like natural ground, shadows, or image noise."
+                                    ),
+                                ],
+                                deps=VerifierDeps(detection=result),
+                            ),
+                            timeout=settings.VERIFIER_TIMEOUT_S,
                         )
-                    except Exception:
-                        logger.exception("Detector: verifier failed — skipping frame")
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            "Detector: verifier timed out after %.0fs — is Ollama running? (ollama serve)",
+                            settings.VERIFIER_TIMEOUT_S,
+                        )
+                        continue
+                    except Exception as exc:
+                        logger.warning(
+                            "Detector: verifier failed (%s: %s) — skipping frame",
+                            type(exc).__name__, exc,
+                        )
                         continue
 
                     verified = verifier_result.data
@@ -183,6 +226,11 @@ class MissionCoordinator:
     # ------------------------------------------------------------------
 
     async def run(self) -> None:
+        dashboard_sub = self.session.declare_subscriber(
+            settings.topic_robodog_command, self._on_dashboard_command
+        )
+        logger.info("Coordinator: subscribed to dashboard commands on %s", settings.topic_robodog_command)
+
         explore_thread = threading.Thread(
             target=self._run_exploration,
             daemon=True,
@@ -205,6 +253,7 @@ class MissionCoordinator:
             self.explore_agent.stop_exploration()
             raise
         finally:
+            dashboard_sub.undeclare()
             logger.info("Coordinator: coverage complete — shutting down detector")
             detector_task.cancel()
             try:

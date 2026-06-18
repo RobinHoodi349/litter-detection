@@ -33,6 +33,7 @@ class MapPanel(DashboardPanel):
             (
                 f"Position: **x={frame.x_m:.2f}m, y={frame.y_m:.2f}m** | "
                 f"Yaw: **{frame.yaw_deg:.0f} deg** | "
-                f"Hindernisse: **Kamera {frame.camera_obstacles} / LiDAR {frame.lidar_obstacles}**"
+                f"Hindernisse: **Kamera {frame.camera_obstacles} / LiDAR {frame.lidar_obstacles}** | "
+                f"Erkundet: **{frame.explored_area_m2:.1f} m² ({frame.explored_cells} Zellen)**"
             ),
         )

@@ -25,8 +25,21 @@ def _build_gateway() -> RobotMotionGateway:
 
 
 class ExploreAgent:
-    def __init__(self, pathplanner=None, gateway=None):
-        self.pathplanner = pathplanner or PathPlannerAgent()
+    def __init__(self, pathplanner=None, gateway=None, session=None):
+        cfg = Settings()
+
+        if session is not None:
+            self._nav_session = session
+            self._owns_nav_session = False
+        else:
+            conf = zenoh.Config()
+            if cfg.ZENOH_ROUTER:
+                conf.insert_json5("connect/endpoints", json.dumps([cfg.ZENOH_ROUTER]))
+            self._nav_session = zenoh.open(conf)
+            self._owns_nav_session = True
+            logger.info("ExploreAgent: Zenoh nav session opened")
+
+        self.pathplanner = pathplanner or PathPlannerAgent(session=self._nav_session)
         self.gateway = gateway or _build_gateway()
 
         self.route = []
@@ -39,15 +52,6 @@ class ExploreAgent:
         self._ready_to_move.set()
         # Set to interrupt a running PointNavigator
         self._nav_stop = threading.Event()
-
-        # One long-lived Zenoh session shared across all PointNavigator calls.
-        # Avoids repeated open/close which causes ZError close timeouts.
-        cfg = Settings()
-        conf = zenoh.Config()
-        if cfg.ZENOH_ROUTER:
-            conf.insert_json5("connect/endpoints", json.dumps([cfg.ZENOH_ROUTER]))
-        self._nav_session = zenoh.open(conf)
-        logger.info("ExploreAgent: Zenoh nav session opened")
 
     def handle_request(self, request):
         request_type = request.get("type")
@@ -96,7 +100,19 @@ class ExploreAgent:
             stop_event=self._nav_stop,
             timeout_s=timeout_s,
             zenoh_session=self._nav_session,
+            collision_check=self._collision_check,
         )
+
+    def _collision_check(self, x: float, y: float, yaw_deg: float) -> bool:
+        """Forward-clearance probe used by the navigator to avoid driving into obstacles."""
+        check = getattr(self.pathplanner, "is_forward_clear", None)
+        if check is None:
+            return True
+        try:
+            return check(x, y, yaw_deg)
+        except Exception:
+            logger.debug("ExploreAgent: collision check failed", exc_info=True)
+            return True
 
     def stop_robot(self) -> None:
         self.gateway.publish_movement(MovementCommand(source=MovementSource.autonomous))
@@ -194,10 +210,11 @@ class ExploreAgent:
         self._nav_stop.set()
         self._ready_to_move.set()
         self.stop_robot()
-        try:
-            self._nav_session.close()
-        except Exception:
-            pass
+        if self._owns_nav_session:
+            try:
+                self._nav_session.close()
+            except Exception:
+                pass
 
         return {
             "status": "stopped",

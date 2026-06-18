@@ -20,7 +20,7 @@ import math
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from litter_detection.config import Settings
 from litter_detection.agent.models import MovementCommand, MovementSource, OdometryState
@@ -97,6 +97,7 @@ class PointNavigator:
         stop_event: threading.Event | None = None,
         timeout_s: float | None = None,
         zenoh_session=None,
+        collision_check: Callable[[float, float, float], bool] | None = None,
     ) -> bool:
         """Blockiert bis zur Zielankunft oder Abbruch.
 
@@ -108,6 +109,10 @@ class PointNavigator:
                            wiederholtes Öffnen/Schließen bei vielen Wegpunkten.
                            Wenn None, wird eine eigene Session geöffnet und am Ende
                            geschlossen.
+            collision_check: Optionaler Callback (x, y, yaw_deg) -> bool. Liefert er vor
+                           einer Vorwärtsbewegung False (Hindernis voraus), stoppt die
+                           Navigation und gibt False zurück, damit der Aufrufer mit den
+                           aktuellen Sensordaten neu plant.
 
         Returns:
             True wenn Ziel erreicht, False bei Abbruch oder Timeout.
@@ -143,6 +148,20 @@ class PointNavigator:
                     self._stop()
                     logger.info("Ziel (%.2f, %.2f) erreicht.", self.target_x, self.target_y)
                     return True
+                # Kollisionserkennung: vor jeder Vorwärtsbewegung prüfen, ob die
+                # Strecke voraus frei ist. Hindernis → stoppen und neu planen lassen.
+                if (
+                    cmd.x > 0.0
+                    and collision_check is not None
+                    and self._pose is not None
+                    and not collision_check(self._pose.x, self._pose.y, self._pose.yaw_deg)
+                ):
+                    logger.warning(
+                        "Navigator: Hindernis voraus bei (%.2f, %.2f) — Stopp, neu planen.",
+                        self._pose.x, self._pose.y,
+                    )
+                    self._stop()
+                    return False
                 self.gateway.publish_movement(cmd)
                 time.sleep(self.publish_interval_s)
         except KeyboardInterrupt:
