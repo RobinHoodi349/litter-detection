@@ -33,11 +33,39 @@ Other approaches fine-tune a yolo model: e.g. see for https://github.com/jeremy-
 
 ## Setup
 
-Init project:
+Init project (desktop: Windows AMD64 / Linux x86_64):
 
 ```bash
 uv sync
 ```
+
+`uv sync`/`uv run` work without the `vendor/` directory on desktop platforms —
+the lockfile is resolved only for the desktop environments (see `[tool.uv]
+environments` in `pyproject.toml`), so the aarch64 Jetson wheels are never
+referenced off the Jetson.
+
+### Jetson setup (aarch64)
+
+The Jetson is intentionally **not** covered by the desktop lockfile, because its
+CUDA-enabled `torch`/`torchvision` come from NVIDIA JetPack builds that aren't on
+PyPI. Install the CUDA wheels first (from the vendored files, transferred to the
+Jetson separately — they're too large for GitHub and are git-ignored), then the
+project on top so the `torch>=2.3.0` requirement is already satisfied:
+
+```bash
+uv venv --python 3.11
+uv pip install vendor/jetson-wheels/*.whl   # CUDA torch + torchvision (JetPack)
+uv pip install -e . --no-deps               # the project itself
+uv pip install eclipse-zenoh opencv-python-headless pydantic pydantic-ai \
+  opentelemetry-sdk opentelemetry-exporter-otlp-proto-grpc python-dotenv
+# vendor/pyrealsense2 is already importable from its build/ dir on the Jetson
+```
+
+(The last line installs only the runtime deps the robot actually needs; adjust to
+taste. The point is that `torch`/`torchvision` come from the vendored wheels, not
+from a `path` source in `pyproject.toml`.) `vendor/pyrealsense2` is a Jetson-only
+RealSense build and is not used off the Jetson — it's referenced by neither uv nor
+any Python import.
 
 Content:
 

@@ -32,22 +32,28 @@ dependencies = [
     "pydantic-ai>=0.0.14",
     "gradio>=5.0.0",
 ]
+# Resolve/lock ONLY for the desktop platforms. This keeps the aarch64 Jetson
+# out of the universal resolution, so a local `path` source for the Jetson
+# wheels is never needed — and `uv run` / `uv lock` never touch vendor/ on a
+# laptop. The Jetson (aarch64) is installed separately, see "Jetson setup" below.
+[tool.uv]
+environments = [
+    "sys_platform == 'win32'",
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+
 [[tool.uv.index]]
 name = "pytorch"
 url = "https://download.pytorch.org/whl/cu121"
 explicit = true
 
-# Desktops (Windows AMD64 / Linux x86_64) use the cu121 wheels; the Jetson
-# (aarch64) uses the vendored NVIDIA JetPack wheels under vendor/jetson-wheels.
+# Desktops (Windows AMD64 / Linux x86_64) pull torch/torchvision from the cu121
+# index. On the Jetson these come from the vendored NVIDIA JetPack wheels under
+# vendor/jetson-wheels — installed manually (see "Jetson setup" below), NOT via
+# a path source here, so the wheels are never required off the Jetson.
 [tool.uv.sources]
-torch = [
-    { index = "pytorch", marker = "platform_machine != 'aarch64'" },
-    { path = "vendor/jetson-wheels/torch-2.4.0a0+gitd990dad-cp311-cp311-linux_aarch64.whl", marker = "platform_machine == 'aarch64'" },
-]
-torchvision = [
-    { index = "pytorch", marker = "platform_machine != 'aarch64'" },
-    { path = "vendor/jetson-wheels/torchvision-0.19.0a0+48b1edf-cp311-cp311-linux_aarch64.whl", marker = "platform_machine == 'aarch64'" },
-]
+torch = [{ index = "pytorch", marker = "platform_machine != 'aarch64'" }]
+torchvision = [{ index = "pytorch", marker = "platform_machine != 'aarch64'" }]
 
 [build-system]
 requires = ["uv_build>=0.8.4,<0.9.0"]
