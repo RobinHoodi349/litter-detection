@@ -35,7 +35,9 @@ class LitterDetector:
         checkpoint = PROJECT_ROOT / settings.MODEL_NAME
         if not checkpoint.exists():
             raise FileNotFoundError(f"Model checkpoint not found: {checkpoint}")
-        model = settings.MODEL_CLASS(dropout=settings.DROPOUT).to(self._device)
+        # pretrained=False: the checkpoint below supplies all weights, so we
+        # avoid the ImageNet backbone download (fails on an offline Jetson).
+        model = settings.MODEL_CLASS(dropout=settings.DROPOUT, pretrained=False).to(self._device)
         model.load_state_dict(torch.load(checkpoint, map_location=self._device))
         model.eval()
         n = sum(p.numel() for p in model.parameters())

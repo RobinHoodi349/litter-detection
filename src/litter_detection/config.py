@@ -1,9 +1,18 @@
 '''Configuration for the Litter Detector application'''
+import os
 from pathlib import Path
 from dataclasses import dataclass
 from litter_detection.training.train import EfficientNetB1UNet
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
 
 @dataclass
 class Settings:
@@ -15,10 +24,11 @@ class Settings:
     PROCESSING_TIMEOUT_SECONDS:int = 5
     THRESHOLD:float = 0.8
     LITTER_COVERAGE_THRESHOLD:float = 0.0  # min fraction of pixels to trigger reactor
-    
 
-    # Zenoh config
-    ZENOH_ROUTER:str =  "tcp/localhost:7447"
+
+    # Zenoh config — override ZENOH_ROUTER so the same code runs on the Jetson
+    # (tcp/localhost:7447) and points at the robot/router from a remote machine.
+    ZENOH_ROUTER:str =  os.getenv("ZENOH_ROUTER", "tcp/localhost:7447")
     topic_frame:str = "robodog/sensors/go2_camera"
     topic_mask_binary:str = "litter/mask/binary"
     topic_mask_probabilities:str = "litter/mask/probabilities"
@@ -40,9 +50,11 @@ class Settings:
     CAMERA_RANGE_M: float = 2.0        # how far ahead the camera sees on the ground [m]
     CAMERA_COVERAGE_OVERLAP: float = 0.20  # min. overlap between adjacent footprints
 
-    # Vision verifier model (must support image input, e.g. llava, moondream)
-    VISION_MODEL_NAME: str = "moondream:latest"
-    USE_VERIFIER: bool = True
+    # Vision verifier model (must support image input + structured output).
+    # qwen2.5vl handles both reliably and fits the Jetson AGX Orin (~6 GB at 7b).
+    # On low-memory hosts override with e.g. VISION_MODEL_NAME=moondream:latest.
+    VISION_MODEL_NAME: str = os.getenv("VISION_MODEL_NAME", "qwen2.5vl:7b")
+    USE_VERIFIER: bool = _env_bool("USE_VERIFIER", True)
     # Seconds to ignore new detections after an alert (avoids re-triggering on same litter)
     ALERT_COOLDOWN_S: float = 10.0
     # Max seconds to wait for Ollama response before giving up
@@ -52,4 +64,4 @@ class Settings:
 
     # OpenTelemetry setup
     SERVICE_NAME:str = "litter-detector"
-    OTEL_ENDPOINT:str = "http://127.0.0.1:4317"
+    OTEL_ENDPOINT:str = os.getenv("OTEL_ENDPOINT", "http://127.0.0.1:4317")
