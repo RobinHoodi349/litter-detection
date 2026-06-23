@@ -28,7 +28,7 @@ class Settings:
 
     # Zenoh config — override ZENOH_ROUTER so the same code runs on the Jetson
     # (tcp/localhost:7447) and points at the robot/router from a remote machine.
-    ZENOH_ROUTER:str =  os.getenv("ZENOH_ROUTER", "tcp/localhost:7447")
+    ZENOH_ROUTER:str =  os.getenv("ZENOH_ROUTER", "tcp/192.168.4.214:7447")
     topic_frame:str = "robodog/sensors/go2_camera"
     topic_mask_binary:str = "litter/mask/binary"
     topic_mask_probabilities:str = "litter/mask/probabilities"

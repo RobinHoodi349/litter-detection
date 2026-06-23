@@ -27,6 +27,9 @@ class DashboardConfig:
     share: bool = _env_bool("LITTER_DASHBOARD_SHARE", False)
     provider: str = os.getenv("LITTER_DASHBOARD_PROVIDER", "zenoh")
     refresh_interval_s: float = float(os.getenv("LITTER_DASHBOARD_REFRESH_S", "1.0"))
+    # How long a real camera/map frame stays "live" after it was received. Once
+    # the feed goes silent past this window, the dashboard reverts to demo data.
+    live_timeout_s: float = float(os.getenv("LITTER_DASHBOARD_LIVE_TIMEOUT_S", "3.0"))
     max_log_entries: int = int(os.getenv("LITTER_DASHBOARD_MAX_LOGS", "250"))
     max_detections: int = int(os.getenv("LITTER_DASHBOARD_MAX_DETECTIONS", "80"))
     max_obstacles: int = int(os.getenv("LITTER_DASHBOARD_MAX_OBSTACLES", "400"))
