@@ -21,6 +21,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
+from litter_detection.config import Settings
 from litter_detection.visualisation.dashboard.config import DashboardConfig
 
 
@@ -49,7 +50,7 @@ def pick_detection_image(overlay, camera, fallback):
 class ZenohDashboardSettings:
     """Lightweight Zenoh settings for the dashboard runtime."""
 
-    router: str = os.getenv("ZENOH_ROUTER", "tcp/localhost:7447")
+    router: str = Settings.ZENOH_ROUTER
     topic_frame: str = os.getenv("LITTER_TOPIC_FRAME", "robodog/sensors/go2_camera")
     topic_visualization: str = os.getenv("LITTER_TOPIC_VISUALIZATION", "litter/visualization")
     topic_alert: str = os.getenv("LITTER_TOPIC_ALERT", "litter/alert")

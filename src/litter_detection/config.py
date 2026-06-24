@@ -28,7 +28,7 @@ class Settings:
 
     # Zenoh config — override ZENOH_ROUTER so the same code runs on the Jetson
     # (tcp/localhost:7447) and points at the robot/router from a remote machine.
-    ZENOH_ROUTER:str =  os.getenv("ZENOH_ROUTER", "tcp/localhost:7447")
+    ZENOH_ROUTER:str =  os.getenv("ZENOH_ROUTER", "tcp/192.168.4.214:7447")
     topic_frame:str = "robodog/sensors/go2_camera"
     topic_mask_binary:str = "litter/mask/binary"
     topic_mask_probabilities:str = "litter/mask/probabilities"
@@ -58,8 +58,10 @@ class Settings:
     USE_VERIFIER: bool = _env_bool("USE_VERIFIER", True)
     # Seconds to ignore new detections after an alert (avoids re-triggering on same litter)
     ALERT_COOLDOWN_S: float = 10.0
-    # Max seconds to wait for Ollama response before giving up
-    VERIFIER_TIMEOUT_S: float = 15.0
+    # Max seconds to wait for Ollama response before giving up.
+    # Generous to absorb cold-start model loading on the Jetson (first request
+    # loads ~2-3 GB into memory); steady-state requests are much faster.
+    VERIFIER_TIMEOUT_S: float = 45.0
     # Min seconds between consecutive inference calls (rate-limits CNN load on laptop)
     INFERENCE_MIN_INTERVAL_S: float = 1.0
 
