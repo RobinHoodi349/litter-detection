@@ -60,6 +60,7 @@ class ZenohDashboardSettings:
     topic_occupancy_grid: str = os.getenv("LITTER_TOPIC_OCCUPANCY_GRID", "litter/occupancy_grid")
     topic_robodog_command: str = os.getenv("LITTER_TOPIC_ROBODOG_COMMAND", "litter/robodog/command")
     topic_movement_command: str = os.getenv("LITTER_TOPIC_MOVEMENT_COMMAND", "robodog/command/motion/move")
+    topic_battery: str = os.getenv("LITTER_TOPIC_BATTERY", "robodog/system_state/battery")
 
 
 @dataclass(frozen=True)
@@ -192,8 +193,10 @@ class QueueDashboardDataProvider:
         # Latest annotated model overlay (recognised mask), used as the image
         # shown for a detection so the validation view reflects the model output.
         self._last_overlay: np.ndarray | None = None
-        self._has_real_camera = False
-        self._has_real_map = False
+        # Monotonic timestamp of the last real frame per feed. Live data is shown
+        # while it stays within ``config.live_timeout_s``; otherwise demo data.
+        self._last_camera_real_at: float | None = None
+        self._last_map_real_at: float | None = None
         self._started_at = time.monotonic()
         self._home_pose: tuple[float, float, float] = (0.0, 0.0, 0.0)
         self._mock_pose: tuple[float, float, float] = self._home_pose
@@ -208,15 +211,22 @@ class QueueDashboardDataProvider:
 
     def get_camera_frame(self) -> CameraFrame:
         self._drain_realtime_queues()
-        if not self._has_real_camera:
+        if not self._is_live(self._last_camera_real_at) or self._last_camera is None:
             self._last_camera = self._mock_camera_frame()
         return self._last_camera
 
     def get_map_frame(self) -> MapFrame:
         self._drain_realtime_queues()
-        if not self._has_real_map:
+        if not self._is_live(self._last_map_real_at) or self._last_map is None:
             self._last_map = self._mock_map_frame()
         return self._last_map
+
+    def _is_live(self, last_real_at: float | None) -> bool:
+        """True while a real frame arrived within ``config.live_timeout_s``."""
+
+        if last_real_at is None:
+            return False
+        return (time.monotonic() - last_real_at) <= self.config.live_timeout_s
 
     def get_trash_detections(self) -> list[TrashDetection]:
         self._drain_realtime_queues()
@@ -278,8 +288,10 @@ class QueueDashboardDataProvider:
         # TODO: connect to real data source.
         self._last_camera, camera_updated = self._drain_latest(self.camera_queue, self._last_camera)
         self._last_map, map_updated = self._drain_latest(self.map_queue, self._last_map)
-        self._has_real_camera = self._has_real_camera or camera_updated
-        self._has_real_map = self._has_real_map or map_updated
+        if camera_updated:
+            self._last_camera_real_at = time.monotonic()
+        if map_updated:
+            self._last_map_real_at = time.monotonic()
         self._drain_all(self.detection_queue, self._detections)
         self._drain_obstacle_queue()
         self._drain_all(self.log_queue, self._logs)
@@ -596,6 +608,26 @@ class QueueDashboardDataProvider:
 
     def _robot_pose_for_obstacles(self) -> tuple[float, float, float]:
         return self._mock_pose
+
+    @staticmethod
+    def _battery_percent_from_payload(payload: dict[str, Any]) -> int | None:
+        """Extract the battery state-of-charge as an int percent (0-100).
+
+        Accepts several common field names and both scales: a value in [0, 1]
+        is read as a fraction (x100), anything larger as a direct percent.
+        Returns ``None`` when the payload carries no recognised battery field.
+        """
+
+        for key in ("battery_percent", "percent", "percentage", "soc", "charge", "level", "battery"):
+            if key not in payload:
+                continue
+            value = QueueDashboardDataProvider._float_value(payload[key])
+            if value is None:
+                continue
+            if 0.0 <= value <= 1.0:
+                value *= 100.0
+            return max(0, min(100, int(round(value))))
+        return None
 
     @staticmethod
     def _confidence_value(value: Any) -> float:
@@ -938,6 +970,7 @@ class ZenohDashboardDataProvider(QueueDashboardDataProvider):
                 session.declare_subscriber(self.settings.topic_lidar, self._on_lidar),
                 session.declare_subscriber(self.settings.topic_obstacle, self._on_obstacle),
                 session.declare_subscriber(self.settings.topic_occupancy_grid, self._on_occupancy_grid),
+                session.declare_subscriber(self.settings.topic_battery, self._on_battery),
             ]
             with self._lock:
                 self._session = session
@@ -1084,6 +1117,17 @@ class ZenohDashboardDataProvider(QueueDashboardDataProvider):
             self._safe_put(self.map_queue, self._render_map_frame())
         except Exception as exc:
             self._safe_put(self.log_queue, LogEntry(self._now(), "WARN", "odometry", f"Could not parse odometry: {exc}"))
+
+    def _on_battery(self, sample: Any) -> None:
+        payload = self._decode_json_sample(sample)
+        if not payload:
+            return
+        percent = self._battery_percent_from_payload(payload)
+        if percent is None:
+            self._safe_put(self.log_queue, LogEntry(self._now(), "WARN", "battery", "No battery value in payload"))
+            return
+        with self._lock:
+            self._status = RobotStatus(self._status.mode, percent, self._status.connected)
 
     def _on_obstacle(self, sample: Any) -> None:
         payload = self._decode_json_sample(sample)
