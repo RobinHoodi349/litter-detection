@@ -79,7 +79,7 @@ async def run(zenoh_session: zenoh.Session) -> None:
                     logger.exception("Verifier agent failed — skipping frame")
                     continue
 
-                verified = verifier_result.data
+                verified = verifier_result.output
 
                 if not verified.litter_confirmed:
                     logger.info(

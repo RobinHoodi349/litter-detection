@@ -233,7 +233,7 @@ class MissionCoordinator:
                 )
                 return
 
-            verified = verifier_result.data
+            verified = verifier_result.output
             if not verified.litter_confirmed:
                 logger.info(
                     f"Detector: verifier rejected detection "
