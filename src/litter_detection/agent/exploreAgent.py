@@ -47,6 +47,9 @@ class ExploreAgent:
         self._ready_to_move.set()
         # Set to interrupt a running PointNavigator
         self._nav_stop = threading.Event()
+        # Serialises BLOCK against the start of a navigation so a BLOCK that
+        # arrives just before move_to_waypoint can't be wiped by its nav_stop.clear().
+        self._block_lock = threading.Lock()
 
     def handle_request(self, request):
         request_type = request.get("type")
@@ -85,7 +88,12 @@ class ExploreAgent:
         return self.execute_frontier_loop()
 
     def move_to_waypoint(self, waypoint, timeout_s: float = WAYPOINT_TIMEOUT_S) -> bool:
-        self._nav_stop.clear()
+        # Atomically check the block state and arm the navigator: if a BLOCK is
+        # active (or races in here), don't start moving — return so the loop waits.
+        with self._block_lock:
+            if self.blocked:
+                return False
+            self._nav_stop.clear()
         nav = PointNavigator(
             target_x=waypoint["x"],
             target_y=waypoint["y"],
@@ -177,9 +185,10 @@ class ExploreAgent:
         }
 
     def block_exploration(self, request):
-        self.blocked = True
-        self._ready_to_move.clear()
-        self._nav_stop.set()
+        with self._block_lock:
+            self.blocked = True
+            self._ready_to_move.clear()
+            self._nav_stop.set()
         self.stop_robot()
 
         return {

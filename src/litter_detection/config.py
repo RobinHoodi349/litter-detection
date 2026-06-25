@@ -64,6 +64,9 @@ class Settings:
     VERIFIER_TIMEOUT_S: float = 45.0
     # Min seconds between consecutive inference calls (rate-limits CNN load on laptop)
     INFERENCE_MIN_INTERVAL_S: float = 1.0
+    # Pause after a verification result before exploration resumes. Gives the robot
+    # time to move off the detected spot so the same frame isn't verified twice.
+    VERIFIER_PAUSE_S: float = 1.5
 
     # OpenTelemetry setup
     SERVICE_NAME:str = "litter-detector"
