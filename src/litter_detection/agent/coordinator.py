@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import zenoh
-from pydantic_ai import BinaryContent
+from pydantic_ai import BinaryContent, capture_run_messages
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -47,6 +47,24 @@ logging.basicConfig(
 logger = logging.getLogger("coordinator")
 
 settings = Settings()
+
+
+def _raw_model_text(messages: list) -> str:
+    """Pull the raw text the model emitted from captured run messages.
+
+    Used for debugging when structured-output parsing fails: returns every
+    TextPart the model produced (newest last), so we can see what the small
+    vision model actually wrote instead of valid JSON.
+    """
+    texts: list[str] = []
+    for msg in messages:
+        for part in getattr(msg, "parts", []):
+            # ModelResponse carries TextPart(s); other part types have no text.
+            if type(part).__name__ == "TextPart":
+                content = getattr(part, "content", None)
+                if content:
+                    texts.append(content)
+    return "\n---\n".join(texts)
 
 
 @dataclass
@@ -202,36 +220,43 @@ class MissionCoordinator:
                 f"Detector: ML flagged litter "
                 f"(coverage={result.pixel_coverage:.2%}) — verifying"
             )
-            try:
-                verifier_result = await asyncio.wait_for(
-                    verifier_agent.run(
-                        [
-                            BinaryContent(data=job.verify_image, media_type="image/jpeg"),
-                            (
-                                f"The ML segmentation model flagged a region covering "
-                                f"{result.pixel_coverage:.2%} of the original camera frame. "
-                                "This image is a cropped view of that region — red pixels mark "
-                                "exactly what the model detected. "
-                                "Does the red-highlighted area contain actual litter? "
-                                "Reject if it looks like natural ground, shadows, or image noise."
-                            ),
-                        ],
-                        deps=VerifierDeps(detection=result),
-                    ),
-                    timeout=settings.VERIFIER_TIMEOUT_S,
-                )
-            except asyncio.TimeoutError:
-                logger.warning(
-                    "Detector: verifier timed out after %.0fs — is Ollama running? (ollama serve)",
-                    settings.VERIFIER_TIMEOUT_S,
-                )
-                return
-            except Exception as exc:
-                logger.warning(
-                    "Detector: verifier failed (%s: %s) — skipping frame",
-                    type(exc).__name__, exc,
-                )
-                return
+            # capture_run_messages exposes the exchanged messages even when the run
+            # raises (e.g. the 3b model emits unparseable JSON), so we can log the
+            # raw model text to see exactly what tripped up the schema validation.
+            with capture_run_messages() as messages:
+                try:
+                    verifier_result = await asyncio.wait_for(
+                        verifier_agent.run(
+                            [
+                                BinaryContent(data=job.verify_image, media_type="image/jpeg"),
+                                (
+                                    f"The ML segmentation model flagged a region covering "
+                                    f"{result.pixel_coverage:.2%} of the original camera frame. "
+                                    "This image is a cropped view of that region — red pixels mark "
+                                    "exactly what the model detected. "
+                                    "Does the red-highlighted area contain actual litter? "
+                                    "Reject if it looks like natural ground, shadows, or image noise."
+                                ),
+                            ],
+                            deps=VerifierDeps(detection=result),
+                        ),
+                        timeout=settings.VERIFIER_TIMEOUT_S,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "Detector: verifier timed out after %.0fs — is Ollama running? (ollama serve)",
+                        settings.VERIFIER_TIMEOUT_S,
+                    )
+                    return
+                except Exception as exc:
+                    logger.warning(
+                        "Detector: verifier failed (%s: %s) — skipping frame",
+                        type(exc).__name__, exc,
+                    )
+                    raw = _raw_model_text(messages)
+                    if raw:
+                        logger.warning("Detector: verifier raw model output:\n%s", raw)
+                    return
 
             verified = verifier_result.output
             if not verified.litter_confirmed:

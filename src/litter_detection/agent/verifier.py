@@ -18,6 +18,10 @@ verifier_agent = Agent(
     # tool-based structured output. PromptedOutput instructs the model to emit JSON
     # and parses it instead — works with any model.
     output_type=PromptedOutput(VerifiedDetection),
+    # The small 3b model often needs a couple of tries to emit schema-valid JSON
+    # (wrong confidence label, markdown fences, stray prose). pydantic-ai feeds the
+    # validation error back on each retry so the model can self-correct.
+    output_retries=3,
     system_prompt=(
         "You are a litter detection quality controller for an autonomous robot dog "
         "patrolling an outdoor area.\n\n"
