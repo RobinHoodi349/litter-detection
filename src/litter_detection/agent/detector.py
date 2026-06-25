@@ -173,13 +173,41 @@ def crop_to_detection(
     frame_h: int,
     frame_w: int,
     padding_px: int = 40,
+    min_frac: float = 0.5,
 ) -> bytes:
-    """Crop frame to the detected litter region with padding, re-encoded as JPEG."""
+    """Crop frame to the detected litter region with padding, re-encoded as JPEG.
+
+    Litter typically covers only ~3% of the frame, so the raw bbox is tiny and
+    gives the verifier almost no surrounding context. On top of the fixed
+    ``padding_px`` we therefore guarantee the crop spans at least ``min_frac`` of
+    each frame dimension, expanded symmetrically around the bbox centre (then
+    clamped to the frame). This keeps the litter centred while showing enough
+    background to tell real litter from natural ground.
+    """
     x1, y1, x2, y2 = bbox
-    x1 = max(0, x1 - padding_px)
-    y1 = max(0, y1 - padding_px)
-    x2 = min(frame_w - 1, x2 + padding_px)
-    y2 = min(frame_h - 1, y2 + padding_px)
+    x1 -= padding_px
+    y1 -= padding_px
+    x2 += padding_px
+    y2 += padding_px
+
+    # Enforce a minimum crop size (fraction of the frame) around the bbox centre.
+    min_w = int(frame_w * min_frac)
+    min_h = int(frame_h * min_frac)
+    if (x2 - x1) < min_w:
+        cx = (x1 + x2) / 2
+        x1 = int(cx - min_w / 2)
+        x2 = int(cx + min_w / 2)
+    if (y2 - y1) < min_h:
+        cy = (y1 + y2) / 2
+        y1 = int(cy - min_h / 2)
+        y2 = int(cy + min_h / 2)
+
+    # Clamp to frame bounds (shift-free: just clip, the centre stays close enough).
+    x1 = max(0, x1)
+    y1 = max(0, y1)
+    x2 = min(frame_w - 1, x2)
+    y2 = min(frame_h - 1, y2)
+
     img = cv2.imdecode(np.frombuffer(frame_bytes, np.uint8), cv2.IMREAD_COLOR)
     crop = img[y1 : y2 + 1, x1 : x2 + 1]
     _, encoded = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 85])

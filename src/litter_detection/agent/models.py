@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # --- Detection models ---
@@ -24,6 +24,23 @@ class VerifiedDetection(BaseModel):
     litter_confirmed: bool
     confidence: Literal["high", "medium", "low"]
     description: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def _unwrap_properties(cls, data: Any) -> Any:
+        """Tolerate the small vision model echoing the JSON *schema* shape.
+
+        qwen2.5vl:3b frequently nests the actual values under a "properties" key
+        (mirroring the schema it was shown) instead of emitting a flat object.
+        Unwrap that so the fields validate normally.
+        """
+        if (
+            isinstance(data, dict)
+            and isinstance(data.get("properties"), dict)
+            and {"litter_confirmed", "confidence", "description"} & data["properties"].keys()
+        ):
+            return data["properties"]
+        return data
 
 
 @dataclass
