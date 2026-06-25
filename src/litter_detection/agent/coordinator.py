@@ -215,87 +215,94 @@ class MissionCoordinator:
 
     async def _process_verification(self, loop: asyncio.AbstractEventLoop, job: _VerifyJob) -> None:
         result = job.result
-        if settings.USE_VERIFIER:
-            logger.info(
-                f"Detector: ML flagged litter "
-                f"(coverage={result.pixel_coverage:.2%}) — verifying"
-            )
-            # capture_run_messages exposes the exchanged messages even when the run
-            # raises (e.g. the 3b model emits unparseable JSON), so we can log the
-            # raw model text to see exactly what tripped up the schema validation.
-            with capture_run_messages() as messages:
-                try:
-                    verifier_result = await asyncio.wait_for(
-                        verifier_agent.run(
-                            [
-                                BinaryContent(data=job.verify_image, media_type="image/jpeg"),
-                                (
-                                    f"The ML segmentation model flagged a region covering "
-                                    f"{result.pixel_coverage:.2%} of the original camera frame. "
-                                    "This image is a cropped view of that region — red pixels mark "
-                                    "exactly what the model detected. "
-                                    "Does the red-highlighted area contain actual litter? "
-                                    "Reject if it looks like natural ground, shadows, or image noise."
-                                ),
-                            ],
-                            deps=VerifierDeps(detection=result),
-                        ),
-                        timeout=settings.VERIFIER_TIMEOUT_S,
+        # Hold the robot in place while the (slow) verifier runs so it stays on the
+        # detected spot instead of driving on. Resumed in the finally block, after a
+        # short pause so the same frame isn't immediately verified again.
+        await loop.run_in_executor(
+            None,
+            self.explore_agent.handle_request,
+            {"type": "BLOCK", "reason": "verifying"},
+        )
+        try:
+            if settings.USE_VERIFIER:
+                logger.info(
+                    f"Detector: ML flagged litter "
+                    f"(coverage={result.pixel_coverage:.2%}) — verifying"
+                )
+                # capture_run_messages exposes the exchanged messages even when the run
+                # raises (e.g. the 3b model emits unparseable JSON), so we can log the
+                # raw model text to see exactly what tripped up the schema validation.
+                with capture_run_messages() as messages:
+                    try:
+                        verifier_result = await asyncio.wait_for(
+                            verifier_agent.run(
+                                [
+                                    BinaryContent(data=job.verify_image, media_type="image/jpeg"),
+                                    (
+                                        f"The ML segmentation model flagged a region covering "
+                                        f"{result.pixel_coverage:.2%} of the original camera frame. "
+                                        "This image is a cropped view of that region — red pixels mark "
+                                        "exactly what the model detected. "
+                                        "Does the red-highlighted area contain actual litter? "
+                                        "Reject if it looks like natural ground, shadows, or image noise."
+                                    ),
+                                ],
+                                deps=VerifierDeps(detection=result),
+                            ),
+                            timeout=settings.VERIFIER_TIMEOUT_S,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            "Detector: verifier timed out after %.0fs — is Ollama running? (ollama serve)",
+                            settings.VERIFIER_TIMEOUT_S,
+                        )
+                        return
+                    except Exception as exc:
+                        logger.warning(
+                            "Detector: verifier failed (%s: %s) — skipping frame",
+                            type(exc).__name__, exc,
+                        )
+                        raw = _raw_model_text(messages)
+                        if raw:
+                            logger.warning("Detector: verifier raw model output:\n%s", raw)
+                        return
+
+                verified = verifier_result.output
+                if not verified.litter_confirmed:
+                    logger.info(
+                        f"Detector: verifier rejected detection "
+                        f"(confidence={verified.confidence}): {verified.description}"
                     )
-                except asyncio.TimeoutError:
-                    logger.warning(
-                        "Detector: verifier timed out after %.0fs — is Ollama running? (ollama serve)",
-                        settings.VERIFIER_TIMEOUT_S,
-                    )
-                    return
-                except Exception as exc:
-                    logger.warning(
-                        "Detector: verifier failed (%s: %s) — skipping frame",
-                        type(exc).__name__, exc,
-                    )
-                    raw = _raw_model_text(messages)
-                    if raw:
-                        logger.warning("Detector: verifier raw model output:\n%s", raw)
                     return
 
-            verified = verifier_result.output
-            if not verified.litter_confirmed:
                 logger.info(
-                    f"Detector: verifier rejected detection "
+                    f"Detector: litter confirmed "
                     f"(confidence={verified.confidence}): {verified.description}"
                 )
-                return
+                await publish_zenoh_alert(self.session, result, verified)
+            else:
+                verified = VerifiedDetection(
+                    litter_confirmed=True,
+                    confidence="low",
+                    description="Verifier disabled — ML model decision only",
+                )
+                logger.info(
+                    f"Detector: litter detected "
+                    f"(coverage={result.pixel_coverage:.2%}) — verifier disabled"
+                )
+                await publish_zenoh_alert(self.session, result, verified)
 
-            logger.info(
-                f"Detector: litter confirmed "
-                f"(confidence={verified.confidence}): {verified.description}"
-            )
-            await publish_zenoh_alert(self.session, result, verified)
-        else:
-            verified = VerifiedDetection(
-                litter_confirmed=True,
-                confidence="low",
-                description="Verifier disabled — ML model decision only",
-            )
-            logger.info(
-                f"Detector: litter detected "
-                f"(coverage={result.pixel_coverage:.2%}) — verifier disabled"
-            )
-            await publish_zenoh_alert(self.session, result, verified)
+            self._last_alert_time = time.time()
 
-        self._last_alert_time = time.time()
-
-        if result.pixel_coverage > 0.05:
-            # Tell ExploreAgent to pause directly — no Zenoh round-trip needed
-            # since coordinator has direct access to both agents.
-            await loop.run_in_executor(
-                None,
-                self.explore_agent.handle_request,
-                {"type": "BLOCK", "reason": "litter_detected"},
-            )
-            # block_movement publishes to Zenoh for the robot hardware
-            # (reverse command + blocked flag) and waits for the hold duration.
-            await block_movement(self.session, result)
+            if result.pixel_coverage > 0.05:
+                # block_movement publishes to Zenoh for the robot hardware
+                # (reverse command + blocked flag) and waits for the hold duration.
+                # The robot is already paused via the BLOCK above.
+                await block_movement(self.session, result)
+        finally:
+            # Brief pause after the result so the robot can move off the spot and the
+            # same frame isn't re-detected, then let exploration continue.
+            await asyncio.sleep(settings.VERIFIER_PAUSE_S)
             await loop.run_in_executor(
                 None,
                 self.explore_agent.handle_request,
