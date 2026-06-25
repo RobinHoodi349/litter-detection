@@ -645,6 +645,15 @@ class QueueDashboardDataProvider:
             return default
 
     @staticmethod
+    def _int_value(value: Any, default: int | None = None) -> int | None:
+        try:
+            if value is None:
+                return default
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
     def _payload_is_obstacle(payload: dict[str, Any]) -> bool:
         if any(key in payload for key in ("obstacles", "objects", "detections", "obstacle_detected")):
             return True
@@ -1077,6 +1086,14 @@ class ZenohDashboardDataProvider(QueueDashboardDataProvider):
         camera_image = self._last_camera.image if self._last_camera is not None else None
         fallback_image = self._mock_detection("litter", confidence, 0).image
         image = pick_detection_image(self._last_overlay, camera_image, fallback_image)
+        bbox = payload.get("bbox") or payload.get("bounding_box")
+        if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+            image = self._annotate_bbox(
+                image,
+                [int(value) for value in bbox],
+                self._int_value(payload.get("frame_width")),
+                self._int_value(payload.get("frame_height")),
+            )
         position = self._position_text(payload)
         detection = TrashDetection(
             image=image,
