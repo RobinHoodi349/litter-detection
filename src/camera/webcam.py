@@ -1,13 +1,10 @@
-import json
 import logging
-import os
 import sys
 import time
 
 import cv2
-import zenoh
-sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
-from src.config.config import Settings
+from litter_detection.config import Settings
+from litter_detection.zenoh_session import open_zenoh_session
 
 settings = Settings()
 
@@ -22,9 +19,7 @@ logger = logging.getLogger("webcam")
 
 def publish_webcam():
     logger.info(f"Connecting to Zenoh router at {settings.ZENOH_ROUTER}…")
-    conf = zenoh.Config()
-    conf.insert_json5("connect/endpoints", json.dumps([settings.ZENOH_ROUTER]))
-    session = zenoh.open(conf)
+    session = open_zenoh_session(settings.ZENOH_ROUTER)
     logger.info("Zenoh session open. Publishing webcam frames to litter/frame.")
 
     cap = cv2.VideoCapture(0)
@@ -56,5 +51,9 @@ def publish_webcam():
         logger.info("Beende Webcam-Publisher.")
 
 
-if __name__ == "__main__":
+def main():
     publish_webcam()
+
+
+if __name__ == "__main__":
+    main()
