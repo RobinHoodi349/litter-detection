@@ -23,8 +23,8 @@ from pathlib import Path
 import threading
 import time
 
-sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
-from src.config.config import Settings
+from litter_detection.config import Settings
+from litter_detection.zenoh_session import open_zenoh_session
 
 settings = Settings()
 # Setup logging
@@ -311,9 +311,7 @@ def main():
     """Main entry point."""
     logger.info(f"Connecting to Zenoh router at {settings.ZENOH_ROUTER}...")
     
-    conf = zenoh.Config()
-    conf.insert_json5("connect/endpoints", json.dumps([settings.ZENOH_ROUTER]))
-    z = zenoh.open(conf)    
+    z = open_zenoh_session(settings.ZENOH_ROUTER)
     logger.info("Subscribing to Zenoh topics...")
     
     # Subscribe to all relevant topics
