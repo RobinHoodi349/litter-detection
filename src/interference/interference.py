@@ -1,13 +1,8 @@
-import sys
 from pathlib import Path
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-SRC_ROOT = PROJECT_ROOT / "src"
-AUTO_RESEARCH_DIR = PROJECT_ROOT / "auto-research"
-sys.path.insert(0, str(SRC_ROOT))
-sys.path.insert(0, str(AUTO_RESEARCH_DIR))
+from litter_detection.config import Settings
+from litter_detection.zenoh_session import open_zenoh_session
 
-from src.config.config import Settings
-from train import *
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 import zenoh
 import torch
@@ -50,7 +45,7 @@ visualization_duration = meter.create_histogram("visualization_duration_seconds"
 mask_resizing_duration = meter.create_histogram("mask_resizing_duration_seconds", description="Mask resizing time", unit="s")
 pipeline_duration = meter.create_histogram("pipeline_duration_seconds", description="Total end-to-end pipeline duration", unit="s")
 zenoh_publish_duration = meter.create_histogram("zenoh_publish_duration_seconds", description="Zenoh publication time", unit="s")
-frame_queue_depth = meter.create_observable_gauge("frame_queue_depth", description="Number of frames in processing queue", unit="1", callbacks=[lambda options: [options.Observation(len(frame_queue))]])
+#frame_queue_depth = meter.create_observable_gauge("frame_queue_depth", description="Number of frames in processing queue", unit="1", callbacks=[lambda options: [options.Observation(len(frame_queue))]])
 confidence_hist = meter.create_histogram("detection_confidence", description="Detection confidence scores", unit="1")
 frames_processed = meter.create_counter("frames_processed_total", description="Total frames processed")
 frames_skipped = meter.create_counter("frames_skipped_total", description="Frames skipped due to age")
@@ -198,9 +193,7 @@ def visualize_mask(frame_bytes: bytes, mask_binary: np.ndarray, original_frame_h
 def main():
     load_model()
 
-    conf = zenoh.Config()
-    conf.insert_json5("connect/endpoints", json.dumps([settings.ZENOH_ROUTER]))
-    z = zenoh.open(conf)
+    z = open_zenoh_session(settings.ZENOH_ROUTER)
     frame_sub = z.declare_subscriber(settings.topic_frame, on_frame_received)
     logging.info(f"Subscribed to Zenoh topic: {settings.topic_frame}")
     
