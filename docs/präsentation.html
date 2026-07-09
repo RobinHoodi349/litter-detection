@@ -1,0 +1,1225 @@
+<title>Litter-Detection-Robodog — Präsentation</title>
+<style>
+  :root{
+    --ground:#1d2e47;
+    --panel:#223865;
+    --panel-2:#18294a;
+    --text:#E6EDF3;
+    --muted:#8AA0BD;
+    --gold:#e89e14;
+    --green:#3fd0d0;
+    --red:#f04a92;
+    --blue:#5B9BF0;
+    --line:rgba(120,160,210,0.10);
+    --line-strong:rgba(120,160,210,0.22);
+    --mono:"JetBrains Mono","SF Mono",ui-monospace,"Cascadia Code",Consolas,monospace;
+    --sans:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{
+    margin:0;
+    background:var(--ground);
+    color:var(--text);
+    font-family:var(--sans);
+    -webkit-font-smoothing:antialiased;
+    overflow:hidden;
+  }
+  /* blueprint grid atmosphere */
+  .bg{
+    position:fixed;inset:0;z-index:0;pointer-events:none;
+    background-image:
+      linear-gradient(var(--line) 1px,transparent 1px),
+      linear-gradient(90deg,var(--line) 1px,transparent 1px);
+    background-size:44px 44px;
+    -webkit-mask-image:radial-gradient(ellipse 120% 90% at 70% 0%,#000 30%,transparent 90%);
+    mask-image:radial-gradient(ellipse 120% 90% at 70% 0%,#000 30%,transparent 90%);
+    opacity:.6;
+  }
+  .bg::after{
+    content:"";position:absolute;inset:0;
+    background:radial-gradient(circle at 85% 12%,rgba(242,177,55,.10),transparent 45%),
+               radial-gradient(circle at 8% 95%,rgba(91,155,240,.10),transparent 45%);
+  }
+
+  .deck{position:relative;z-index:1;height:100vh;width:100vw;}
+
+  /* top status bar */
+  .topbar{
+    position:fixed;top:0;left:0;right:0;height:52px;z-index:5;
+    display:flex;align-items:center;justify-content:space-between;
+    padding:0 clamp(16px,3vw,40px);
+    font-family:var(--mono);font-size:12px;letter-spacing:.14em;
+    color:var(--muted);text-transform:uppercase;
+    border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg,rgba(14,22,34,.92),rgba(14,22,34,.55));
+    backdrop-filter:blur(6px);
+  }
+  .topbar .mark{color:var(--text);font-weight:600;letter-spacing:.22em;}
+  .topbar .mark b{color:var(--gold);}
+  .topbar .sec{display:flex;align-items:center;gap:10px;}
+  .topbar .dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 10px var(--green);}
+  .topbar .count b{color:var(--text);}
+
+  /* slides */
+  .slide{
+    position:absolute;inset:0;
+    padding:96px clamp(22px,6vw,104px) 88px;
+    display:flex;flex-direction:column;
+    opacity:0;visibility:hidden;
+    transform:translateY(14px);
+    transition:opacity .5s ease,transform .5s ease,visibility .5s;
+    overflow-y:auto;overflow-x:hidden;
+  }
+  .slide.active{opacity:1;visibility:visible;transform:none;}
+  .slide::-webkit-scrollbar{width:8px;}
+  .slide::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:8px;}
+
+  .eyebrow{
+    font-family:var(--mono);font-size:clamp(11px,1.1vw,13px);
+    letter-spacing:.28em;text-transform:uppercase;color:var(--gold);
+    display:flex;align-items:center;gap:12px;margin:0 0 18px;
+  }
+  .eyebrow .num{color:var(--muted);}
+  .eyebrow .ln{height:1px;flex:0 0 46px;background:var(--gold);opacity:.6;}
+
+  h1{font-size:clamp(42px,7.6vw,106px);line-height:.95;letter-spacing:-.028em;
+     font-weight:800;margin:0 0 24px;}
+  h2{font-size:clamp(26px,3.8vw,50px);line-height:1.02;letter-spacing:-.02em;
+     font-weight:800;margin:0 0 24px;}
+  h2 .hl{color:var(--gold);}
+  p.lead{font-size:clamp(15px,1.5vw,19px);line-height:1.55;color:#c4d2e4;max-width:62ch;margin:0 0 16px;}
+  /* Titelfolie: größere Schrift */
+  .title-wrap p.lead{font-size:clamp(17px,1.75vw,23px);line-height:1.6;max-width:64ch;}
+  .title-wrap .eyebrow{font-size:clamp(12px,1.25vw,14.5px);}
+  .title-wrap .badge{font-size:13px;padding:9px 14px;}
+  .muted{color:var(--muted);}
+
+  /* generic layout helpers */
+  .row{display:flex;gap:clamp(16px,2.4vw,34px);flex-wrap:wrap;}
+  .col{flex:1 1 0;min-width:240px;}
+  .fill{flex:1 1 auto;min-height:0;}
+  .center-v{justify-content:center;}
+
+  /* cards */
+  .card{
+    background:linear-gradient(160deg,var(--panel),rgba(19,32,58,.4));
+    border:1px solid var(--line-strong);border-radius:4px;
+    padding:24px 26px;
+  }
+  .card h3{margin:0 0 10px;font-size:17px;letter-spacing:-.01em;}
+  .card p{margin:0;color:var(--muted);font-size:14px;line-height:1.6;}
+  .card .tag{font-family:var(--mono);font-size:11px;color:var(--gold);letter-spacing:.08em;}
+
+  .grid{display:grid;gap:clamp(16px,2vw,26px);}
+  .g2{grid-template-columns:repeat(2,1fr);}
+  .g3{grid-template-columns:repeat(3,1fr);}
+  .g4{grid-template-columns:repeat(4,1fr);}
+
+  /* breathing room: let filling content sit centered in the slide, not packed at the top */
+  .grid.fill,.metrics.fill{align-content:center;}
+  .seq.fill,.stack.fill{justify-content:center;}
+  .row.fill{align-items:center;}
+
+  /* agenda: roomier cards that breathe across the full slide height */
+  .agenda{gap:clamp(18px,2.4vw,30px);align-content:center;}
+  .agenda .card{padding:26px 28px;display:flex;flex-direction:column;gap:8px;min-height:148px;justify-content:center;}
+  .agenda .card h3{font-size:19px;margin:0;}
+  .agenda .card p{font-size:14.5px;line-height:1.55;}
+  @media (max-width:860px){.agenda .card{min-height:0;}}
+
+  ul.clean{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:clamp(16px,1.8vw,24px);}
+  ul.clean li{display:flex;gap:16px;align-items:flex-start;font-size:clamp(14px,1.4vw,17px);line-height:1.55;}
+  ul.clean li .ico{flex:0 0 26px;height:26px;border-radius:3px;display:grid;place-items:center;
+    font-family:var(--mono);font-size:12px;font-weight:700;color:var(--ground);background:var(--gold);margin-top:1px;}
+  ul.clean li.g .ico{background:var(--green);}
+  ul.clean li.r .ico{background:var(--red);color:#fff;}
+  ul.clean li.b .ico{background:var(--blue);}
+
+  /* data table */
+  .tablewrap{overflow-x:auto;border:1px solid var(--line-strong);border-radius:4px;}
+  table{border-collapse:collapse;width:100%;font-size:clamp(12px,1.25vw,14.5px);min-width:520px;}
+  th,td{text-align:left;padding:11px 16px;border-bottom:1px solid var(--line);}
+  thead th{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--gold);background:rgba(242,177,55,.05);}
+  tbody tr:last-child td{border-bottom:none;}
+  td.mono,code{font-family:var(--mono);}
+  code{color:var(--blue);font-size:.92em;background:rgba(91,155,240,.10);padding:2px 6px;border-radius:3px;}
+  .dir{color:var(--green);font-family:var(--mono);font-size:.9em;}
+  .dir.out{color:var(--gold);}
+
+  /* grouped topic cards */
+  .tgroup{display:flex;flex-direction:column;gap:16px;}
+  .topics{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:14px;}
+  .topics li{display:flex;flex-direction:column;gap:3px;border-left:2px solid var(--line-strong);padding-left:13px;}
+  .topics li code{font-family:var(--mono);font-size:12px;color:var(--text);background:none;padding:0;border-radius:0;word-break:break-all;}
+  .topics li span{font-size:12.5px;color:var(--muted);line-height:1.35;}
+  .tgroup.in .topics li{border-left-color:rgba(63,208,138,.5);}
+  .tgroup.cmd .topics li{border-left-color:rgba(242,177,55,.5);}
+  .tgroup.int .topics li{border-left-color:rgba(91,155,240,.5);}
+
+  /* layered architecture diagram */
+  .stack{display:flex;flex-direction:column;gap:14px;width:100%;}
+  .layer{border:1px solid var(--line-strong);border-radius:4px;padding:18px 20px;
+    display:flex;align-items:center;gap:18px;background:rgba(19,32,58,.35);}
+  .layer .lbl{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--muted);flex:0 0 132px;}
+  .layer .chips{display:flex;gap:10px;flex-wrap:wrap;}
+  .chip{font-family:var(--mono);font-size:12.5px;padding:8px 13px;border-radius:3px;
+    border:1px solid var(--line-strong);color:var(--text);background:rgba(255,255,255,.02);}
+  .layer.bus{border-color:rgba(91,155,240,.5);background:rgba(91,155,240,.08);}
+  .layer.bus .chip{border-color:rgba(91,155,240,.4);color:var(--blue);}
+  .layer.agents{border-color:rgba(242,177,55,.4);}
+  .layer.agents .chip{border-color:rgba(242,177,55,.35);}
+  .arrow-down{align-self:center;color:var(--muted);font-size:14px;line-height:0;}
+
+  /* left→right data-flow diagram */
+  .flow{display:flex;align-items:stretch;gap:clamp(8px,1.4vw,20px);width:100%;}
+  .flowcol{flex:1 1 0;border:1px solid var(--line-strong);border-radius:4px;padding:18px 16px;
+    display:flex;flex-direction:column;gap:11px;background:rgba(19,32,58,.35);}
+  .flowcol.agents{border-color:rgba(242,177,55,.45);background:rgba(242,177,55,.05);}
+  .flowhead{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--gold);margin-bottom:3px;}
+  .flowcol.sensors .flowhead{color:var(--green);}
+  .flowcol.out .flowhead{color:var(--blue);}
+  .node{font-family:var(--mono);font-size:13.5px;padding:11px 12px;border:1px solid var(--line-strong);
+    border-radius:3px;background:rgba(255,255,255,.02);color:var(--text);text-align:center;}
+  .flowcol.agents .node{border-color:rgba(242,177,55,.3);}
+  .flowarrow{display:grid;place-items:center;color:var(--gold);font-size:26px;font-weight:700;flex:0 0 auto;}
+  .zbus{border:1px solid rgba(91,155,240,.5);background:rgba(91,155,240,.10);color:var(--blue);
+    border-radius:4px;padding:16px 18px;text-align:center;font-family:var(--mono);
+    font-size:clamp(11px,1.2vw,13px);letter-spacing:.05em;}
+  .zbus b{color:#9dc2f6;}
+  @media (max-width:860px){
+    .flow{flex-direction:column;}
+    .flowarrow{transform:rotate(90deg);font-size:20px;}
+  }
+
+  /* architecture characteristics (slide: Charakteristika) */
+  .stylechip{display:inline-flex;align-items:center;gap:10px;font-family:var(--mono);font-size:13px;
+    letter-spacing:.06em;padding:10px 16px;border-radius:3px;border:1px solid rgba(91,155,240,.5);
+    background:rgba(91,155,240,.08);color:var(--blue);}
+  .stylechip b{color:#9dc2f6;}
+  .stylechip .k{color:var(--muted);text-transform:uppercase;letter-spacing:.14em;font-size:11px;}
+  .drive{border:1px solid rgba(242,177,55,.5);background:rgba(242,177,55,.06);border-radius:4px;
+    padding:22px 24px;display:flex;flex-direction:column;gap:9px;}
+  .drive .rank{font-family:var(--mono);font-size:11px;color:var(--gold);letter-spacing:.12em;}
+  .drive h3{margin:0;font-size:clamp(19px,2.2vw,24px);}
+  .drive p{margin:0;color:var(--muted);font-size:13.5px;line-height:1.55;}
+  .considered{font-family:var(--mono);font-size:12.5px;color:var(--muted);letter-spacing:.04em;line-height:1.6;}
+  .considered b{color:var(--text);}
+
+  /* agent orchestration tree (slide: Agenten-Orchestrierung) */
+  .orch{display:flex;flex-direction:column;align-items:center;gap:0;width:100%;}
+  .orch .root{font-family:var(--mono);font-size:14px;padding:8px 22px;border-radius:4px;
+    border:1px solid rgba(240,88,74,.5);background:rgba(240,88,74,.08);color:var(--text);text-align:center;}
+  .orch .root b{color:var(--red);}
+  .orch .root span{color:var(--muted);}
+  .orch .par{font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;
+    color:var(--gold);margin:6px 0;}
+  .branches{display:grid;grid-template-columns:1fr 1fr;gap:clamp(16px,2.2vw,30px);width:100%;}
+  .branch{border:1px solid var(--line-strong);border-radius:4px;padding:12px 14px;display:flex;
+    flex-direction:column;gap:6px;background:rgba(19,32,58,.35);}
+  .branch.expl{border-color:rgba(91,155,240,.45);}
+  .branch.det{border-color:rgba(242,177,55,.45);}
+  .branch .bhead{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;margin-bottom:3px;}
+  .branch.expl .bhead{color:var(--blue);}
+  .branch.det .bhead{color:var(--gold);}
+  .bnode{font-family:var(--mono);font-size:12.5px;padding:6px 11px;border:1px solid var(--line-strong);
+    border-radius:3px;background:rgba(255,255,255,.02);color:var(--text);}
+  .bnode b{color:var(--text);}
+  .bnode .sub{display:block;font-size:10.5px;color:var(--muted);margin-top:2px;}
+  .bnode .tool{color:var(--green);}
+  .bsplit{display:grid;grid-template-columns:1fr 1fr;gap:9px;}
+  .bdown{text-align:center;color:var(--muted);font-size:11px;line-height:1;}
+  .bnote{font-size:11.5px;color:var(--muted);}
+  .bnote b{color:var(--red);}
+  @media (max-width:680px){.branches,.bsplit{grid-template-columns:1fr;}}
+
+  /* horizontal in/out strips (slide: Überblick) */
+  .iorow{display:flex;align-items:center;flex-wrap:wrap;gap:10px;border:1px solid var(--line-strong);
+    border-radius:4px;padding:8px 14px;background:rgba(19,32,58,.35);}
+  .iorow .iolbl{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+    flex:0 0 auto;margin-right:6px;}
+  .iorow.sensors{border-color:rgba(63,208,138,.4);}
+  .iorow.sensors .iolbl{color:var(--green);}
+  .iorow.out{border-color:rgba(91,155,240,.4);}
+  .iorow.out .iolbl{color:var(--blue);}
+  .iorow .node{padding:8px 12px;font-size:12.5px;}
+  .iorow .iohint{margin-left:auto;font-size:11px;color:var(--muted);line-height:1.3;max-width:44%;text-align:right;}
+  .iorow.out .iohint b{color:var(--text);}
+  @media (max-width:980px){.iorow .iohint{margin-left:0;max-width:100%;text-align:left;}}
+
+  /* sequence flow */
+  .seq{display:flex;flex-direction:column;gap:0;}
+  .step{display:flex;gap:20px;align-items:flex-start;padding:16px 0;position:relative;}
+  .step .n{flex:0 0 34px;height:34px;border-radius:50%;display:grid;place-items:center;
+    font-family:var(--mono);font-weight:700;font-size:13px;color:var(--ground);background:var(--gold);z-index:1;}
+  .step:not(:last-child) .n::after{content:"";position:absolute;left:16px;top:34px;bottom:-18px;width:2px;background:var(--line-strong);}
+  .step .txt{padding-top:5px;font-size:clamp(13px,1.35vw,16px);line-height:1.45;}
+  .step .who{font-family:var(--mono);font-size:11px;color:var(--blue);letter-spacing:.06em;}
+  .step.alert .n{background:var(--red);color:#fff;}
+  .step.alert .who{color:var(--red);}
+
+  /* horizontal pipeline */
+  .pipe{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;}
+  .pnode{flex:1 1 150px;min-width:140px;border:1px solid var(--line-strong);border-radius:4px;padding:18px;text-align:center;background:rgba(19,32,58,.4);}
+  .pnode .k{font-family:var(--mono);font-size:11px;color:var(--gold);letter-spacing:.1em;text-transform:uppercase;display:block;margin-bottom:8px;}
+  .pnode .v{font-size:14.5px;line-height:1.4;}
+  .pnode.stage1{border-color:rgba(63,208,138,.45);}
+  .pnode.stage2{border-color:rgba(242,177,55,.5);}
+  .pnode.alert{border-color:rgba(240,88,74,.5);}
+  .pgap{display:grid;place-items:center;padding:0 10px;color:var(--gold);font-size:20px;font-weight:700;}
+
+  .metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:clamp(18px,2vw,28px);}
+  .metric{border:1px solid var(--line-strong);border-radius:4px;padding:26px 28px;font-family:var(--mono);
+    display:flex;flex-direction:column;justify-content:center;gap:10px;min-height:128px;}
+  .metric .mv{font-size:clamp(26px,3vw,38px);font-weight:700;color:var(--gold);line-height:1;}
+  .metric .mk{font-size:14px;color:var(--muted);letter-spacing:.03em;line-height:1.4;overflow-wrap:anywhere;}
+  /* compact metrics (e.g. the model facts on the segmentation slide) */
+  .mini .metric{min-height:0;padding:16px 18px;gap:6px;}
+  .mini .metric .mv{font-size:clamp(21px,2.3vw,28px);}
+  .mini .metric .mk{font-size:12px;}
+  .metric.green .mv{color:var(--green);}
+  .metric.blue .mv{color:var(--blue);}
+  .metric.red .mv{color:var(--red);}
+
+  /* title slide */
+  .title-wrap{display:grid;grid-template-columns:1.15fr .85fr;gap:40px;align-items:center;height:100%;}
+  #field{width:100%;height:100%;display:block;border:1px solid var(--line-strong);border-radius:4px;background:rgba(10,17,28,.6);}
+  .field-box{position:relative;min-height:300px;height:100%;}
+  .legend{position:absolute;left:14px;bottom:12px;display:flex;gap:16px;font-family:var(--mono);font-size:11px;color:var(--muted);}
+  .legend span{display:flex;align-items:center;gap:6px;}
+  .legend i{width:11px;height:11px;border-radius:3px;display:inline-block;}
+  .badges{display:flex;gap:8px;flex-wrap:wrap;margin-top:26px;}
+  .badge{font-family:var(--mono);font-size:11.5px;letter-spacing:.08em;padding:8px 13px;border-radius:3px;border:1px solid var(--line-strong);color:var(--muted);}
+  .badge b{color:var(--gold);font-weight:600;}
+
+  /* bottom nav */
+  .nav{
+    position:fixed;left:0;right:0;bottom:0;z-index:5;height:56px;
+    display:flex;align-items:center;gap:18px;
+    padding:0 clamp(16px,3vw,40px);
+    border-top:1px solid var(--line);
+    background:linear-gradient(0deg,rgba(14,22,34,.92),rgba(14,22,34,.4));
+    backdrop-filter:blur(6px);
+  }
+  .progress{flex:1 1 auto;height:3px;background:var(--line-strong);border-radius:3px;overflow:hidden;}
+  .progress .bar{height:100%;width:0;background:var(--gold);box-shadow:0 0 12px rgba(242,177,55,.6);transition:width .45s ease;}
+  .dots{display:flex;gap:7px;}
+  .dots button{width:9px;height:9px;border-radius:50%;border:none;padding:0;cursor:pointer;
+    background:var(--line-strong);transition:background .25s,transform .25s;}
+  .dots button.on{background:var(--gold);transform:scale(1.25);}
+  .navbtn{font-family:var(--mono);font-size:12px;letter-spacing:.1em;text-transform:uppercase;
+    background:none;border:1px solid var(--line-strong);color:var(--text);border-radius:3px;
+    padding:8px 14px;cursor:pointer;transition:border-color .2s,color .2s;}
+  .navbtn:hover{border-color:var(--gold);color:var(--gold);}
+  .navbtn:disabled{opacity:.3;cursor:default;}
+  .hint{font-family:var(--mono);font-size:11px;color:var(--muted);letter-spacing:.08em;}
+
+  :focus-visible{outline:2px solid var(--gold);outline-offset:3px;}
+
+  @media (max-width:860px){
+    .title-wrap{grid-template-columns:1fr;gap:20px;}
+    .field-box{min-height:240px;order:-1;}
+    .g3,.g4{grid-template-columns:repeat(2,1fr);}
+    .hint{display:none;}
+  }
+  @media (max-width:560px){
+    .g2,.g3,.g4{grid-template-columns:1fr;}
+    .layer{flex-direction:column;align-items:flex-start;gap:10px;}
+    .layer .lbl{flex-basis:auto;}
+  }
+  @media (prefers-reduced-motion:reduce){
+    .slide{transition:opacity .2s;}
+    .progress .bar{transition:none;}
+  }
+
+  /* embedded frontier-exploration sim (slide 13) */
+  .simwrap{display:flex;flex-direction:column;gap:12px;background:rgba(10,17,28,.5);}
+  .simhead{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;}
+  .simphase{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:12px;color:var(--text);}
+  .simdot{width:8px;height:8px;border-radius:50%;background:var(--gold);box-shadow:0 0 8px var(--gold);transition:opacity .2s;}
+  .simcanvas-box{position:relative;flex:1 1 auto;min-height:250px;border:1px solid var(--line-strong);border-radius:4px;background:rgba(10,17,28,.6);overflow:hidden;}
+  #simCanvas{width:100%;height:100%;display:block;}
+  .simcmd{font-family:var(--mono);font-size:12px;color:var(--gold);letter-spacing:.02em;}
+  .simstats{display:flex;gap:10px;}
+  .simstat{flex:1 1 0;border:1px solid var(--line-strong);border-radius:3px;padding:7px 10px;font-family:var(--mono);}
+  .simstat .k{display:block;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);}
+  .simstat .v{font-size:17px;color:var(--text);font-variant-numeric:tabular-nums;}
+  .simctrl{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+  .sim-primary{background:var(--gold)!important;color:var(--ground)!important;border-color:var(--gold)!important;}
+  .sim-primary:hover{background:#ffb733!important;border-color:#ffb733!important;color:var(--ground)!important;}
+  .simspeed{font-family:var(--mono);font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;}
+  .simspeed input{accent-color:var(--gold);width:84px;}
+  .simlegend{display:flex;flex-wrap:wrap;gap:11px;font-family:var(--mono);font-size:11px;color:var(--muted);}
+  .simlegend span{display:flex;align-items:center;gap:6px;}
+  .simlegend i{width:11px;height:11px;border-radius:3px;display:inline-block;}
+</style>
+
+<div class="bg" aria-hidden="true"></div>
+
+<header class="topbar">
+  <span class="mark">LITTER&nbsp;·&nbsp;<b>OPS</b></span>
+  <span class="sec"><span class="dot"></span><span id="section">Mission Briefing</span></span>
+  <span class="count">SLIDE <b id="cur">01</b> / 15</span>
+</header>
+
+<main class="deck" id="deck">
+
+  <!-- 1 TITLE -->
+  <section class="slide active" data-sec="Mission Briefing">
+    <div class="title-wrap">
+      <div>
+        <p class="eyebrow"><span class="num">00</span><span class="ln"></span>Labor KI-Systeme · Robodog</p>
+        <h1>Autonomer Müll&shy;erkennungs-<span style="color:var(--gold)">Robodog</span></h1>
+        <p class="lead">Ein agentisches KI-System auf dem Unitree&nbsp;GO2: Der Roboterhund
+          durchsucht ein abgestecktes Feld selbstständig nach Müll, markiert jeden Fund auf
+          einer Karte und meldet ihn an den Menschen.</p>
+        <div class="badges">
+          <span class="badge"><b>Architektur</b> · Agenten über Zenoh</span>
+          <span class="badge"><b>Überwachung</b> · Dashboard + Telemetrie</span>
+          <span class="badge"><b>KI</b> · Bilderkennung</span>
+        </div>
+      </div>
+      <div class="field-box">
+        <canvas id="field" aria-label="Animierte Skizze: Robodog fährt ein Suchfeld im Rasenmäher-Muster ab und markiert Müllfunde"></canvas>
+        <div class="legend">
+          <span><i style="background:var(--gold)"></i>Suchpfad</span>
+          <span><i style="background:var(--green)"></i>erkundet</span>
+          <span><i style="background:var(--red)"></i>Müll</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2 AGENDA -->
+  <section class="slide" data-sec="Agenda">
+    <p class="eyebrow"><span class="num">01</span><span class="ln"></span>Agenda</p>
+    <h2>Was euch in <span class="hl">20 Minuten</span> erwartet</h2>
+    <div class="grid g3 fill agenda">
+      <div class="card"><span class="tag">01 — 03</span><h3>Das Szenario</h3><p>Aufgabe, Annahmen und das Suchfeld im Rasenmäher-Muster.</p></div>
+      <div class="card"><span class="tag">04 — 08</span><h3>Softwarearchitektur</h3><p>Architektur & Orchestrierung, Charakteristika, Komponenten, Zenoh-Bus und Ablauf.</p></div>
+      <div class="card"><span class="tag">09 — 10</span><h3>Überwachung</h3><p>Live-Dashboard für den Hund, OpenTelemetry für die Agenten.</p></div>
+      <div class="card"><span class="tag">11 — 12</span><h3>KI: Bilderkennung</h3><p>Segmentierungs-CNN plus Vision-LLM als Doppel-Check.</p></div>
+      <div class="card"><span class="tag">13 — 14</span><h3>KI: Planung & Forschung</h3><p>Frontier-Exploration und der AutoResearch-Loop.</p></div>
+      <div class="card"><span class="tag">15</span><h3>Demo & Ausblick</h3><p>Mission live, Zusammenfassung und nächste Schritte.</p></div>
+    </div>
+  </section>
+
+  <!-- 3 SZENARIO -->
+  <section class="slide" data-sec="Szenario">
+    <p class="eyebrow"><span class="num">02</span><span class="ln"></span>Das Szenario</p>
+    <h2>Suchen, markieren, melden</h2>
+    <div class="row fill" style="align-items:stretch;">
+      <div class="col" style="flex:1.1 1 0;display:flex;flex-direction:column;justify-content:center;">
+        <ul class="clean">
+          <li><span class="ico">1</span><div><b>Feld absuchen.</b> Der Hund deckt ein abgestecktes quadratisches Feld systematisch ab (Boustrophedon / Rasenmäher-Muster).</div></li>
+          <li class="r"><span class="ico">2</span><div><b>Müll markieren.</b> Jeder Fund wird auf einer Karte verortet und an den Menschen gemeldet — eingesammelt wird später.</div></li>
+          <li class="g"><span class="ico">3</span><div><b>Signal geben.</b> Erkennt der Hund Müll, hält er an und macht auf den Fund aufmerksam.</div></li>
+        </ul>
+        <div class="card" style="margin-top:22px;">
+          <span class="tag">ANNAHMEN</span>
+          <p style="margin-top:6px;">Müll liegt am Boden und hat ausreichende Größe · der Roboter kennt seine Pose (Self-Localization) · im Feld keine Kollisionen am Start · der Roboter ist eine <b style="color:var(--text)">Blackbox</b>, gesteuert über Nachrichten.</p>
+        </div>
+      </div>
+      <div class="col card" style="display:flex;flex-direction:column;gap:14px;background:rgba(10,17,28,.5);">
+        <span class="tag">SUCHZONE · BOUSTROPHEDON-ABDECKUNG</span>
+        <div style="position:relative;flex:1 1 auto;min-height:240px;">
+          <canvas id="field2" style="width:100%;height:100%;display:block;" aria-label="Schaubild des Suchfelds: Start, Suchpfad im Rasenmäher-Muster, markierte Müllfunde"></canvas>
+        </div>
+        <div class="legend" style="position:static;justify-content:flex-start;">
+          <span><i style="background:var(--green)"></i>Start</span>
+          <span><i style="background:var(--gold)"></i>Suchpfad</span>
+          <span><i style="background:var(--red)"></i>Müll</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4 ARCHITEKTUR ÜBERBLICK -->
+  <section class="slide" data-sec="Architektur" style="padding-top:72px;padding-bottom:64px;">
+    <p class="eyebrow" style="margin-bottom:10px;"><span class="num">03</span><span class="ln"></span>Softwarearchitektur · Überblick</p>
+    <h2 style="margin-bottom:14px;">Vom Bild <span class="hl">bis zur Meldung</span></h2>
+    <div class="fill" style="display:flex;flex-direction:column;justify-content:center;gap:clamp(4px,1vh,10px);">
+      <div class="iorow sensors">
+        <span class="iolbl">GO2 · Blackbox</span>
+        <div class="node">Kamera</div><div class="node">LiDAR</div><div class="node">Odometrie</div><div class="node">Batterie</div>
+      </div>
+      <div class="bdown">↓</div>
+      <div class="zbus"><b>ECLIPSE ZENOH</b> · Publish/Subscribe-Bus · typsichere Pydantic-JSON</div>
+      <div class="bdown">↓</div>
+      <div class="orch">
+        <div class="root"><b>Coordinator</b> <span>· orchestriert</span></div>
+        <div class="par">↓ parallel ↓</div>
+        <div class="branches">
+          <div class="branch expl">
+            <span class="bhead">Strang A · Exploration</span>
+            <div class="bnode"><b>Explore</b><span class="sub">↻ holt wiederholt das nächste Ziel</span></div>
+            <div class="bdown">↓ verzweigt in</div>
+            <div class="bsplit">
+              <div class="bnode"><b>Pfadplaner</b><span class="sub">A* &amp; Frontier</span></div>
+              <div class="bnode"><b>Move</b><span class="sub"><span class="tool">Tools:</span> walk · turn · coordinate</span></div>
+            </div>
+          </div>
+          <div class="branch det">
+            <span class="bhead">Strang B · Detektion &amp; Reaktion</span>
+            <div class="bnode"><b>Litter Detector</b><span class="sub">← Input-Frame · CNN</span></div>
+            <div class="bnode"><b>Evaluate</b><span class="sub"><span class="tool">Tool:</span> detector</span></div>
+            <div class="bnode"><b>Verifier</b><span class="sub">VLM · ↻ Loop zurück zum Detector</span></div>
+            <div class="bnode"><b>Reaktion</b><span class="sub"><span class="tool">Aktionen:</span> litter/alert + Overlay · Block / Reverse</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="bdown">↓</div>
+      <div class="iorow out">
+        <span class="iolbl">Ausgabe</span>
+        <div class="node">Bewegungsbefehle</div><div class="node">Alert + Karte</div><div class="node">Dashboard</div>
+        <span class="iohint">Roboter = Blackbox · alles über Zenoh-Topics · bei Fund „!Block" an Move (5&nbsp;s)</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5 CHARAKTERISTIKA -->
+  <section class="slide" data-sec="Architektur">
+    <p class="eyebrow"><span class="num">04</span><span class="ln"></span>Softwarearchitektur · Charakteristika</p>
+    <h2>Plug-in-Architektur — <span class="hl">drei Treiber</span></h2>
+    <div class="fill" style="display:flex;flex-direction:column;justify-content:center;gap:clamp(18px,3vh,30px);">
+      <div>
+        <span class="stylechip"><span class="k">Architekturstil</span><b>Plug-In</b></span>
+      </div>
+      <div class="grid g3" style="align-items:stretch;">
+        <div class="drive">
+          <span class="rank">TREIBER 01</span>
+          <h3>Modularität</h3>
+          <p>Jede Komponente hat genau eine Verantwortung und ist über Zenoh-Topics lose gekoppelt — Agenten lassen sich als Plug-In ergänzen oder austauschen.</p>
+        </div>
+        <div class="drive">
+          <span class="rank">TREIBER 02</span>
+          <h3>Performance</h3>
+          <p>Echtzeit-Inferenz mit Frame-Dropping, die langsame LLM-Verifikation über eine beschränkte Queue entkoppelt, Latenzen per OpenTelemetry messbar.</p>
+        </div>
+        <div class="drive">
+          <span class="rank">TREIBER 03</span>
+          <h3>Testbarkeit</h3>
+          <p>Roboter als Blackbox hinter dem Bus — Komponenten einzeln gegen Mock/Dry-Run testbar, plus Validierungs-Tab mit Precision-Kennzahl.</p>
+        </div>
+      </div>
+      <p class="considered">Weitere betrachtete Charakteristika: <b>Beständigkeit</b> · <b>Interoperabilität</b> · <b>Erweiterbarkeit</b> — bewusst nachrangig zu den drei Treibern.</p>
+    </div>
+  </section>
+
+  <!-- 6 KOMPONENTEN -->
+  <section class="slide" data-sec="Architektur">
+    <p class="eyebrow"><span class="num">05</span><span class="ln"></span>Softwarearchitektur · Komponenten</p>
+    <h2>Jede Komponente, <span class="hl">eine Verantwortung</span></h2>
+    <div class="grid g3 fill">
+      <div class="card"><span class="tag">coordinator.py</span><h3>MissionCoordinator</h3><p>Orchestriert alles: Exploration (Thread) + Detektor + Verifikations-Worker (asyncio).</p></div>
+      <div class="card"><span class="tag">exploreAgent.py</span><h3>ExploreAgent</h3><p>Fährt das Feld ab, holt Wegpunkte, reagiert auf BLOCK / UNBLOCK.</p></div>
+      <div class="card"><span class="tag">pathPlanerAgent.py</span><h3>PathPlannerAgent</h3><p>Frontier-Exploration: Occupancy-Grid + A*, plant das nächste Ziel.</p></div>
+      <div class="card"><span class="tag">navigator.py</span><h3>PointNavigator</h3><p>Low-Level: erst drehen, dann fahren — bis der Wegpunkt erreicht ist.</p></div>
+      <div class="card"><span class="tag">detector.py</span><h3>LitterDetector</h3><p>CNN-Inferenz (Segmentierung) → Binärmaske + Bounding-Box.</p></div>
+      <div class="card"><span class="tag">verifier.py</span><h3>verifier_agent</h3><p>Vision-LLM bestätigt oder verwirft die Detektion.</p></div>
+    </div>
+    <p class="lead muted" style="margin-top:18px;">Nebenläufigkeit mit Entkopplung: die langsame LLM-Verifikation hängt an einer beschränkten Queue, damit der schnelle Inferenz-Loop nie blockiert.</p>
+  </section>
+
+  <!-- 7 ZENOH -->
+  <section class="slide" data-sec="Architektur">
+    <p class="eyebrow"><span class="num">06</span><span class="ln"></span>Softwarearchitektur · Nachrichtenbus</p>
+    <h2>Eclipse Zenoh — das <span class="hl">Nervensystem</span></h2>
+    <div class="fill" style="display:flex;flex-direction:column;justify-content:center;gap:clamp(16px,2.6vh,28px);">
+      <div class="grid g3" style="align-items:stretch;">
+        <div class="card tgroup in">
+          <span class="tag" style="color:var(--green)">Eingänge · Roboter → System</span>
+          <ul class="topics">
+            <li><code>robodog/sensors/go2_camera</code><span>Kamerabilder (JPEG)</span></li>
+            <li><code>robodog/sensors/go2_lidar</code><span>LiDAR-Punktwolke</span></li>
+            <li><code>robodog/system_state/odometry</code><span>Pose (x, y, Quaternion)</span></li>
+            <li><code>robodog/system_state/battery</code><span>Batteriestand</span></li>
+          </ul>
+        </div>
+        <div class="card tgroup cmd">
+          <span class="tag">Befehle · System → Roboter</span>
+          <ul class="topics">
+            <li><code>robodog/command/motion/move</code><span>Bewegungsbefehl (x, y, z_deg)</span></li>
+            <li><code>robodog/command/motion/estop</code><span>Not-Halt (überschreibt alles)</span></li>
+            <li><code>litter/robodog/command</code><span>Start / Stop / Manuell (Dashboard)</span></li>
+          </ul>
+        </div>
+        <div class="card tgroup int">
+          <span class="tag" style="color:var(--blue)">Intern · litter/*</span>
+          <ul class="topics">
+            <li><code>litter/alert</code><span>Bestätigter Fund + Position</span></li>
+            <li><code>litter/visualization</code><span>Annotiertes Bild (rote Maske)</span></li>
+            <li><code>litter/occupancy_grid</code><span>Erkundete / belegte Zellen</span></li>
+          </ul>
+        </div>
+      </div>
+      <p class="lead muted" style="margin:0;">Alle Nachrichten sind typsichere Pydantic-Modelle. Leitplanken: <code>controller</code> &gt; <code>autonomous</code> &gt; <code>planner</code>, Tempolimits für autonome Quellen, veraltete Befehle werden verworfen.</p>
+    </div>
+  </section>
+
+  <!-- 8 SEQUENZ -->
+  <section class="slide" data-sec="Architektur">
+    <p class="eyebrow"><span class="num">07</span><span class="ln"></span>Softwarearchitektur · Ablauf</p>
+    <h2>Eine Mission, <span class="hl">Schritt für Schritt</span></h2>
+    <div class="seq fill" style="max-width:920px;">
+      <div class="step"><span class="n">1</span><div class="txt"><span class="who">Mensch → Coordinator</span><br>START mit Feldgröße — der Coordinator startet die Exploration.</div></div>
+      <div class="step"><span class="n">2</span><div class="txt"><span class="who">ExploreAgent ↔ PathPlanner</span><br>Schleife: nächste Frontier anfragen → A*-Wegpunkte zurück → abfahren.</div></div>
+      <div class="step"><span class="n">3</span><div class="txt"><span class="who">GO2 → Detector</span><br>Kamerabild trifft ein → Segmentierung erzeugt Maske + Bounding-Box.</div></div>
+      <div class="step"><span class="n">4</span><div class="txt"><span class="who">Detector → Verifier</span><br>Zugeschnittener Ausschnitt mit roter Maske geht an das Vision-LLM zur Prüfung.</div></div>
+      <div class="step alert"><span class="n">5</span><div class="txt"><span class="who">Müll bestätigt</span><br>Alarm + Position publiziert (Karte & Meldung) · Hund hält an, setzt zurück, hält 5&nbsp;s · danach UNBLOCK und weiter.</div></div>
+    </div>
+  </section>
+
+  <!-- 9 ÜBERWACHUNG DASHBOARD -->
+  <section class="slide" data-sec="Überwachung">
+    <p class="eyebrow"><span class="num">08</span><span class="ln"></span>Überwachung · Hund</p>
+    <h2>Das <span class="hl">Live-Dashboard</span></h2>
+    <p class="lead">Gradio-Web-Oberfläche im SCADA-Stil, live über Zenoh gespeist — mit Mock-Fallback, falls keine Live-Daten ankommen.</p>
+    <div class="grid g3 fill">
+      <div class="card"><span class="tag">KAMERA</span><h3>Live-Bild</h3><p>Aktuelles Kamerabild mit FPS und erkanntem Müll-Overlay.</p></div>
+      <div class="card"><span class="tag">KARTE</span><h3>Pose & Pfad</h3><p>Roboterposition, gefahrener Pfad, Hindernisse (Kamera/LiDAR), Müll-Marker, Occupancy-Grid.</p></div>
+      <div class="card"><span class="tag">GALERIE</span><h3>Müllfunde</h3><p>Erkannte Funde mit Bild, Label, Konfidenz und Position.</p></div>
+      <div class="card"><span class="tag">STEUERUNG</span><h3>Bedienung</h3><p>Start / Stop / „Zurück zum Start" / Manuelle Übernahme samt Joystick.</p></div>
+      <div class="card"><span class="tag">LOGS</span><h3>Ereignisse</h3><p>Strukturierte Logs, filterbar nach INFO / WARN / ERROR.</p></div>
+      <div class="card" style="border-color:rgba(63,208,138,.4);"><span class="tag" style="color:var(--green)">VALIDIERUNG</span><h3>Precision-Check</h3><p>Mensch bewertet jede Detektion (Müll / kein Müll / unsicher) → Precision-Kennzahl.</p></div>
+    </div>
+  </section>
+
+  <!-- 10 ÜBERWACHUNG TELEMETRIE -->
+  <section class="slide" data-sec="Überwachung">
+    <p class="eyebrow"><span class="num">09</span><span class="ln"></span>Überwachung · Agenten</p>
+    <h2>Telemetrie mit <span class="hl">OpenTelemetry</span></h2>
+    <p class="lead">OTLP/gRPC instrumentiert die Verarbeitungspipeline (Service <code>litter-detector</code>) — anbindbar an Jaeger / Prometheus / Grafana.</p>
+    <div class="metrics fill">
+      <div class="metric"><div class="mv">t<sub>inf</sub></div><div class="mk">inference_s</div></div>
+      <div class="metric"><div class="mv">t<sub>e2e</sub></div><div class="mk">pipeline_s</div></div>
+      <div class="metric blue"><div class="mv">t<sub>pub</sub></div><div class="mk">zenoh_publish_s</div></div>
+      <div class="metric green"><div class="mv">Σ ✓</div><div class="mk">frames_processed</div></div>
+      <div class="metric red"><div class="mv">Σ ⤬</div><div class="mk">frames_skipped</div></div>
+      <div class="metric"><div class="mv">conf</div><div class="mk">detection_conf</div></div>
+    </div>
+    <p class="lead muted" style="margin-top:16px;">Zwei Beobachtungsebenen, sauber getrennt: <b style="color:var(--text)">Betriebssicht</b> (Dashboard, für den Operator) und <b style="color:var(--text)">Systemsicht</b> (Metriken & Logs, für die Entwicklung).</p>
+  </section>
+
+  <!-- 11 KI MODELL -->
+  <section class="slide" data-sec="KI · Bilderkennung">
+    <p class="eyebrow"><span class="num">10</span><span class="ln"></span>KI · Bilderkennung</p>
+    <h2>Pixelgenaue <span class="hl">Segmentierung</span></h2>
+    <div class="row fill">
+      <div class="col">
+        <ul class="clean">
+          <li><span class="ico">◧</span><div><b>Aufgabe.</b> Semantische Segmentierung — pixelweise „Müll ja/nein", wie ein Textmarker über dem Müll. Keine reine Bounding-Box.</div></li>
+          <li class="b"><span class="ico">⛁</span><div><b>Datensatz.</b> TACO (HuggingFace): 1.500 Bilder à 512×512, nur ~5&nbsp;% Müllpixel → starke Klassen-Unwucht.</div></li>
+          <li><span class="ico">▤</span><div><b>Modell.</b> U-Net mit vortrainiertem Encoder. AutoResearch verglich sechs Backbones (Vanilla-U-Net, ResNet34/50, EfficientNet-B1/B3/B4); ausgeliefert wird <code>EfficientNet-B1-U-Net</code>.</div></li>
+        </ul>
+      </div>
+      <div class="col">
+        <div class="grid g2 mini" style="gap:12px;">
+          <div class="metric"><div class="mv">0,79</div><div class="mk">bestes val-IoU · EfficientNet-B1</div></div>
+          <div class="metric green"><div class="mv">B1</div><div class="mk">ausgeliefert · leichter Encoder für Echtzeit</div></div>
+        </div>
+        <div class="grid g3 mini" style="gap:12px;margin-top:12px;">
+          <div class="metric"><div class="mv">512²</div><div class="mk">Eingabe [px]</div></div>
+          <div class="metric"><div class="mv">3×</div><div class="mk">pos_weight</div></div>
+          <div class="metric blue"><div class="mv">0,8</div><div class="mk">Schwelle (Sigmoid)</div></div>
+        </div>
+        <div class="card" style="margin-top:14px;"><p><b style="color:var(--text)">Warum nicht YOLO?</b> Müll ist formlos und liegt verstreut — pixelgenaue Masken passen besser. YOLO-Feinabstimmung diente als geforderter Vergleichsansatz.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 12 KI ZWEISTUFIG -->
+  <section class="slide" data-sec="KI · Bilderkennung">
+    <p class="eyebrow"><span class="num">11</span><span class="ln"></span>KI · Doppel-Check</p>
+    <h2>CNN findet, <span class="hl">Vision-LLM bestätigt</span></h2>
+    <div class="fill" style="display:flex;flex-direction:column;justify-content:center;gap:clamp(22px,3.6vh,46px);">
+      <div class="pipe" style="align-items:stretch;">
+        <div class="pnode"><span class="k">Eingang</span><span class="v">Kamerabild</span></div>
+        <div class="pgap">→</div>
+        <div class="pnode stage1"><span class="k">Stufe 1 · CNN</span><span class="v">EfficientNet-B1 U-Net<br>schnell & sensibel</span></div>
+        <div class="pgap">→</div>
+        <div class="pnode stage2"><span class="k">Stufe 2 · VLM</span><span class="v">qwen2.5vl:3b via Ollama<br>Qualitätskontrolle</span></div>
+        <div class="pgap">→</div>
+        <div class="pnode alert"><span class="k">Ergebnis</span><span class="v">litter/alert<br>+ Karten-Marker</span></div>
+      </div>
+      <div class="row">
+        <div class="col card"><span class="tag" style="color:var(--green)">BESTÄTIGT</span><p style="margin-top:8px;">Plastik, Verpackungen, Dosen, Flaschen, Papier — eindeutig menschengemachter Abfall.</p></div>
+        <div class="col card"><span class="tag" style="color:var(--red)">VERWORFEN</span><p style="margin-top:8px;">Laub, Gras, Steine, Schatten, Roboter-Artefakte. <b style="color:var(--text)">Im Zweifel ablehnen</b> — Fehlalarme kosten unnötige Stopps.</p></div>
+        <div class="col card"><span class="tag">LOKAL & STRUKTURIERT</span><p style="margin-top:8px;">pydantic-ai + Ollama, JSON-Ausgabe (<code>PromptedOutput</code>), kein Cloud-Aufruf. Abschaltbar via <code>USE_VERIFIER</code>.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 13 FRONTIER -->
+  <section class="slide" data-sec="KI · Planung">
+    <p class="eyebrow"><span class="num">12</span><span class="ln"></span>KI · Räumliche Intelligenz</p>
+    <h2>Frontier-Planung <span class="hl">statt stur Bahnen</span></h2>
+    <div class="row fill">
+      <div class="col">
+        <ul class="clean">
+          <li class="b"><span class="ico">▦</span><div><b>Occupancy-Grid (0,20&nbsp;m).</b> LiDAR-Punkte → belegte Zellen mit Sicherheitsaufweitung.</div></li>
+          <li class="g"><span class="ico">◮</span><div><b>Kamera-Fächer (90° / 2&nbsp;m).</b> Sichtfeld wird als „erkundet" markiert.</div></li>
+          <li><span class="ico">✦</span><div><b>Frontier + A*.</b> Grenze erkundet/unbekannt finden, clustern, kollisionsfrei dorthin planen.</div></li>
+          <li class="r"><span class="ico">↻</span><div><b>Re-Planung.</b> Sobald neue LiDAR-Daten Hindernisse zeigen, wird neu geplant.</div></li>
+        </ul>
+      </div>
+      <div class="col card simwrap" style="flex:1.15 1 0;">
+        <div class="simhead">
+          <span class="tag">LIVE · litter/occupancy_grid</span>
+          <span class="simphase"><i class="simdot" id="simDot"></i><span id="simPhase">Bereit</span></span>
+        </div>
+        <div class="simcanvas-box">
+          <canvas id="simCanvas" aria-label="Live-Simulation der Frontier-Exploration: Der Hund erkundet einen unbekannten Raum, markiert erkundete Fläche und Hindernisse und plant per A-Stern zur nächsten Grenze."></canvas>
+        </div>
+        <div class="simcmd" id="simCmd">Befehl: —</div>
+        <div class="simstats">
+          <div class="simstat"><span class="k">Abdeckung</span><span class="v" id="simCov">0%</span></div>
+          <div class="simstat"><span class="k">Frontiers</span><span class="v" id="simFront">0</span></div>
+          <div class="simstat"><span class="k">Müll</span><span class="v" id="simLit">0 / 0</span></div>
+        </div>
+        <div class="simctrl">
+          <button class="navbtn sim-primary" id="simPlay">▶ Start</button>
+          <button class="navbtn" id="simReset">↺ Reset</button>
+          <span class="simspeed">Tempo <input type="range" id="simSpeed" min="1" max="8" step="0.5" value="3"></span>
+        </div>
+        <div class="simlegend">
+          <span><i style="background:#3fd08a"></i>erkundet</span>
+          <span><i style="background:#3c5985"></i>Hindernis</span>
+          <span><i style="background:#5B9BF0"></i>Frontier</span>
+          <span><i style="background:#f2b137"></i>Pfad / Hund</span>
+          <span><i style="background:#f0584a"></i>Müll</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 14 AUTORESEARCH -->
+  <section class="slide" data-sec="KI · AutoResearch">
+    <p class="eyebrow"><span class="num">13</span><span class="ln"></span>KI · im Entwicklungsprozess</p>
+    <h2>AutoResearch — <span class="hl">KI verbessert das Modell</span></h2>
+    <div class="seq fill" style="max-width:880px;">
+      <div class="step"><span class="n">1</span><div class="txt">Training mit <b>festem Zeitbudget</b> — alle Metriken nach <code>MLflow</code>.</div></div>
+      <div class="step"><span class="n">2</span><div class="txt">Ergebnisse analysieren (Analysis-Notebook), <b>eine</b> Hypothese bilden.</div></div>
+      <div class="step"><span class="n">3</span><div class="txt">Genau <b>eine</b> Änderung an den Hyperparametern in <code>train.py</code>.</div></div>
+      <div class="step"><span class="n">4</span><div class="txt">Nächstes Experiment mit sprechendem Run-Namen → <code>findings.md</code>.</div></div>
+    </div>
+    <div class="row" style="margin-top:8px;">
+      <div class="col card"><span class="tag">IM PRODUKT</span><p style="margin-top:6px;">Segmentierungs-CNN + Vision-LLM auf dem Hund.</p></div>
+      <div class="col card"><span class="tag">IM PROZESS</span><p style="margin-top:6px;">AutoResearch-Loop (nach Karpathy) + MLflow-Tracking. Ergebnis: val-IoU von 0,18 (Baseline) auf 0,79 (EfficientNet-B1).</p></div>
+    </div>
+  </section>
+
+  <!-- 15 ZUSAMMENFASSUNG -->
+  <section class="slide" data-sec="Demo & Ausblick">
+    <p class="eyebrow"><span class="num">14</span><span class="ln"></span>Zusammenfassung & Demo</p>
+    <h2>Drei Säulen, <span class="hl">ein autonomes System</span></h2>
+    <div class="fill" style="display:flex;flex-direction:column;justify-content:center;gap:clamp(18px,3vh,32px);">
+      <div class="grid g3">
+        <div class="card"><span class="tag">ARCHITEKTUR</span><h3>Lose gekoppelt</h3><p>Agenten über Zenoh, Roboter als Blackbox, typsichere Nachrichten.</p></div>
+        <div class="card"><span class="tag">ÜBERWACHUNG</span><h3>Zwei Sichten</h3><p>Live-Dashboard für den Hund, OpenTelemetry für die Agenten-Performance.</p></div>
+        <div class="card"><span class="tag">KI</span><h3>Mehrstufig</h3><p>Segmentierung + Vision-LLM, Frontier-Suche, AutoResearch zur Modellpflege.</p></div>
+      </div>
+      <div class="row">
+        <div class="col card" style="border-color:rgba(242,177,55,.4);">
+          <span class="tag">LIVE-DEMO</span>
+          <p style="margin-top:6px;">Mission starten → Hund sucht → Fund wird erkannt, verifiziert, auf der Karte markiert und gemeldet → manuelle Validierung. Fallback: Dashboard im Mock-Modus.</p>
+        </div>
+        <div class="col card">
+          <span class="tag">AUSBLICK</span>
+          <p style="margin-top:6px;">TensorRT-Optimierung auf dem Jetson · Open-Vocabulary-Detektor · Sprach-Interaktion mit dem Operator.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<nav class="nav">
+  <button class="navbtn" id="prev" aria-label="Vorherige Folie">◀ Zurück</button>
+  <div class="progress"><div class="bar" id="bar"></div></div>
+  <div class="dots" id="dots"></div>
+  <button class="navbtn" id="next" aria-label="Nächste Folie">Weiter ▶</button>
+  <button class="navbtn" id="fs" aria-label="Vollbild umschalten" title="Vollbild (F)">⛶ Vollbild</button>
+  <span class="hint">← → · Leertaste · F · Klick</span>
+</nav>
+
+<script>
+(function(){
+  var slides=Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var total=slides.length;
+  var i=0;
+  var bar=document.getElementById('bar');
+  var cur=document.getElementById('cur');
+  var sectionEl=document.getElementById('section');
+  var prevBtn=document.getElementById('prev');
+  var nextBtn=document.getElementById('next');
+  var dotsWrap=document.getElementById('dots');
+
+  slides.forEach(function(s,idx){
+    var b=document.createElement('button');
+    b.setAttribute('aria-label','Folie '+(idx+1));
+    b.addEventListener('click',function(){go(idx);});
+    dotsWrap.appendChild(b);
+  });
+  var dots=Array.prototype.slice.call(dotsWrap.children);
+
+  function pad(n){return (n<10?'0':'')+n;}
+
+  function go(n){
+    n=Math.max(0,Math.min(total-1,n));
+    slides[i].classList.remove('active');
+    dots[i].classList.remove('on');
+    i=n;
+    slides[i].classList.add('active');
+    slides[i].scrollTop=0;
+    dots[i].classList.add('on');
+    bar.style.width=((i)/(total-1)*100)+'%';
+    cur.textContent=pad(i+1);
+    sectionEl.textContent=slides[i].getAttribute('data-sec')||'';
+    prevBtn.disabled=(i===0);
+    nextBtn.disabled=(i===total-1);
+    if(i===0){startField();}else{stopField();}
+    if(i===2){drawScenario();}
+    if(i===12){SIM.start();}else{SIM.stop();}
+  }
+
+  prevBtn.addEventListener('click',function(){go(i-1);});
+  nextBtn.addEventListener('click',function(){go(i+1);});
+
+  // Vollbild
+  var fsBtn=document.getElementById('fs');
+  function fsActive(){return document.fullscreenElement||document.webkitFullscreenElement;}
+  function toggleFs(){
+    if(fsActive()){(document.exitFullscreen||document.webkitExitFullscreen).call(document);}
+    else{var el=document.documentElement;(el.requestFullscreen||el.webkitRequestFullscreen).call(el);}
+  }
+  function syncFs(){if(fsBtn)fsBtn.innerHTML=fsActive()?'⛶ Fenster':'⛶ Vollbild';}
+  if(fsBtn)fsBtn.addEventListener('click',toggleFs);
+  document.addEventListener('fullscreenchange',syncFs);
+  document.addEventListener('webkitfullscreenchange',syncFs);
+
+  document.addEventListener('keydown',function(e){
+    if(e.key==='ArrowRight'||e.key==='PageDown'||e.key===' '){e.preventDefault();go(i+1);}
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){e.preventDefault();go(i-1);}
+    else if(e.key==='Home'){go(0);}
+    else if(e.key==='End'){go(total-1);}
+    else if(e.key==='f'||e.key==='F'){e.preventDefault();toggleFs();}
+  });
+
+  // advance on click in slide area (ignore links/buttons & text drags)
+  document.getElementById('deck').addEventListener('click',function(e){
+    if(window.getSelection && String(window.getSelection())) return;
+    if(e.target.closest('a,button,pre,table,input,.simwrap')) return;
+    go(i+1);
+  });
+
+  /* ---- Hero canvas: robodog field sweep ---- */
+  var cvs=document.getElementById('field');
+  var ctx=cvs.getContext('2d');
+  var raf=null,t0=null,running=false;
+  var reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)').matches;
+  var litter=[[0.22,0.30],[0.63,0.34],[0.40,0.58],[0.78,0.70],[0.16,0.78]];
+  var DPR=Math.max(1,Math.min(2,window.devicePixelRatio||1));
+
+  function resize(){
+    var r=cvs.getBoundingClientRect();
+    if(r.width===0){return;}
+    cvs.width=r.width*DPR;cvs.height=r.height*DPR;
+  }
+
+  function path(progress){
+    // boustrophedon across 6 lanes within a padded field [0..1]
+    // jede Bahn: erst horizontal queren, dann am Bahnende vertikal zur
+    // nächsten Bahn hinunterlaufen (statt zu springen)
+    var lanes=6, seg=1/lanes;
+    var mx=0.05, x0=mx, x1=1-mx;        // halbe Rasterzelle (Raster=10) -> Spaltenmitte,
+                                        // damit der vertikale Übergang durch die Quadratmitte läuft (nicht am Rand)
+    var p=Math.max(0,Math.min(lanes,progress*lanes));
+    var lane=Math.floor(p); if(lane>=lanes){lane=lanes-1;}
+    var f=p-lane;                       // 0..1 innerhalb des Bahn-Blocks
+    var turn=0.15;                      // Anteil für den vertikalen Übergang
+    var yCur=(lane+0.5)*seg, x, y;
+    if(lane===lanes-1 || f<=1-turn){
+      // horizontale Querung (zwischen den Spaltenmitten x0 und x1)
+      var hf=(lane===lanes-1)?f:Math.min(1,f/(1-turn));
+      x=(lane%2===0)?(x0+hf*(x1-x0)):(x1-hf*(x1-x0));
+      y=yCur;
+    }else{
+      // vertikaler Übergang in der Spaltenmitte zur nächsten Bahn
+      var vf=(f-(1-turn))/turn;         // 0..1
+      x=(lane%2===0)?x1:x0;
+      y=yCur+((lane+1.5)*seg-yCur)*vf;
+    }
+    return [x,y];
+  }
+
+  function draw(ts){
+    if(t0===null)t0=ts;
+    var elapsed=(ts-t0)/1000;
+    var dur=14;
+    var prog=reduce?1:Math.min(1,elapsed/dur);
+    var W=cvs.width,H=cvs.height;
+    var pad=0.10;
+    function PX(x){return (pad+x*(1-2*pad))*W;}
+    function PY(y){return (pad+y*(1-2*pad))*H;}
+    ctx.clearRect(0,0,W,H);
+
+    // field grid
+    ctx.strokeStyle='rgba(120,160,210,0.10)';ctx.lineWidth=1*DPR;
+    var N=10;
+    for(var g=0;g<=N;g++){
+      var gx=PX(g/N),gy=PY(g/N);
+      ctx.beginPath();ctx.moveTo(PX(0),gy);ctx.lineTo(PX(1),gy);ctx.stroke();
+      ctx.beginPath();ctx.moveTo(gx,PY(0));ctx.lineTo(gx,PY(1));ctx.stroke();
+    }
+    // field border
+    ctx.strokeStyle='rgba(120,160,210,0.30)';ctx.lineWidth=1.5*DPR;
+    ctx.strokeRect(PX(0),PY(0),PX(1)-PX(0),PY(1)-PY(0));
+
+    // explored swath (green) along traversed path
+    ctx.strokeStyle='rgba(63,208,138,0.16)';
+    ctx.lineWidth=((1-2*pad)/6)*H*0.9;
+    ctx.lineCap='round';ctx.lineJoin='round';
+    ctx.beginPath();
+    var steps=Math.max(2,Math.floor(prog*220));
+    for(var s=0;s<=steps;s++){
+      var pp=path((s/220));var px=PX(pp[0]),py=PY(pp[1]);
+      if(s===0)ctx.moveTo(px,py);else ctx.lineTo(px,py);
+    }
+    ctx.stroke();
+
+    // gold path line
+    ctx.strokeStyle='rgba(242,177,55,0.95)';ctx.lineWidth=2.4*DPR;
+    ctx.beginPath();
+    for(var s2=0;s2<=steps;s2++){
+      var p2=path((s2/220));var x2=PX(p2[0]),y2=PY(p2[1]);
+      if(s2===0)ctx.moveTo(x2,y2);else ctx.lineTo(x2,y2);
+    }
+    ctx.stroke();
+
+    // litter markers — appear once the path sweeps past their lane
+    litter.forEach(function(L){
+      var reached=prog>=Math.min(0.98,(Math.floor(L[1]*6)+0.5)/6 - 0.02);
+      var lx=PX(L[0]),ly=PY(L[1]);
+      ctx.strokeStyle=reached?'rgba(240,88,74,1)':'rgba(240,88,74,0.28)';
+      ctx.lineWidth=2.4*DPR;var a=7*DPR;
+      ctx.beginPath();ctx.moveTo(lx-a,ly-a);ctx.lineTo(lx+a,ly+a);ctx.moveTo(lx-a,ly+a);ctx.lineTo(lx+a,ly-a);ctx.stroke();
+    });
+
+    // robot head
+    var rp=path(prog);var rx=PX(rp[0]),ry=PY(rp[1]);
+    ctx.fillStyle='rgba(242,177,55,1)';
+    ctx.beginPath();ctx.arc(rx,ry,7*DPR,0,Math.PI*2);ctx.fill();
+    ctx.strokeStyle='rgba(14,22,34,0.9)';ctx.lineWidth=2*DPR;ctx.stroke();
+    // pulse glow at robot
+    if(!reduce){
+      var pulse=(Math.sin(elapsed*4)+1)/2;
+      ctx.strokeStyle='rgba(242,177,55,'+(0.4*(1-pulse))+')';
+      ctx.lineWidth=2*DPR;
+      ctx.beginPath();ctx.arc(rx,ry,(7+pulse*10)*DPR,0,Math.PI*2);ctx.stroke();
+    }
+
+    if(!reduce && elapsed<dur+2){raf=requestAnimationFrame(draw);}
+    else if(!reduce && elapsed>=dur+2){t0=null;raf=requestAnimationFrame(draw);} // gentle loop
+  }
+
+  function startField(){
+    if(running)return;running=true;resize();t0=null;
+    if(reduce){draw(0);return;}
+    raf=requestAnimationFrame(draw);
+  }
+  function stopField(){running=false;if(raf){cancelAnimationFrame(raf);raf=null;}}
+
+  /* ---- Scenario canvas: same field, drawn once (static) ---- */
+  var cvs2=document.getElementById('field2');
+  var ctx2=cvs2?cvs2.getContext('2d'):null;
+  function drawScenario(){
+    if(!ctx2)return;
+    var r=cvs2.getBoundingClientRect();if(r.width===0)return;
+    cvs2.width=r.width*DPR;cvs2.height=r.height*DPR;
+    var W=cvs2.width,H=cvs2.height,m=0.06;
+    var side=Math.min(W,H)*(1-2*m),ox=(W-side)/2,oy=(H-side)/2;
+    function PX(x){return ox+x*side;}
+    function PY(y){return oy+y*side;}
+    ctx2.clearRect(0,0,W,H);
+    // grid
+    ctx2.strokeStyle='rgba(120,160,210,0.10)';ctx2.lineWidth=1*DPR;
+    var N=10;for(var g=0;g<=N;g++){var gx=PX(g/N),gy=PY(g/N);
+      ctx2.beginPath();ctx2.moveTo(PX(0),gy);ctx2.lineTo(PX(1),gy);ctx2.stroke();
+      ctx2.beginPath();ctx2.moveTo(gx,PY(0));ctx2.lineTo(gx,PY(1));ctx2.stroke();}
+    // border
+    ctx2.strokeStyle='rgba(120,160,210,0.30)';ctx2.lineWidth=1.5*DPR;
+    ctx2.strokeRect(PX(0),PY(0),PX(1)-PX(0),PY(1)-PY(0));
+    // explored swath
+    ctx2.strokeStyle='rgba(63,208,138,0.14)';ctx2.lineWidth=(side/6)*0.85;
+    ctx2.lineCap='round';ctx2.lineJoin='round';
+    ctx2.beginPath();for(var s=0;s<=220;s++){var pp=path(s/220);var px=PX(pp[0]),py=PY(pp[1]);if(s===0)ctx2.moveTo(px,py);else ctx2.lineTo(px,py);}ctx2.stroke();
+    // gold path
+    ctx2.strokeStyle='rgba(242,177,55,0.95)';ctx2.lineWidth=2.4*DPR;ctx2.lineCap='round';ctx2.lineJoin='round';
+    ctx2.beginPath();for(var s2=0;s2<=220;s2++){var p2=path(s2/220);var x2=PX(p2[0]),y2=PY(p2[1]);if(s2===0)ctx2.moveTo(x2,y2);else ctx2.lineTo(x2,y2);}ctx2.stroke();
+    // litter markers
+    litter.forEach(function(L){var lx=PX(L[0]),ly=PY(L[1]);ctx2.strokeStyle='rgba(240,88,74,1)';ctx2.lineWidth=2.4*DPR;var a=7*DPR;
+      ctx2.beginPath();ctx2.moveTo(lx-a,ly-a);ctx2.lineTo(lx+a,ly+a);ctx2.moveTo(lx-a,ly+a);ctx2.lineTo(lx+a,ly-a);ctx2.stroke();});
+    ctx2.font='600 '+(11*DPR)+'px ui-monospace,monospace';
+    // start marker
+    var sp=path(0),sx=PX(sp[0]),sy=PY(sp[1]),sq=7*DPR;
+    ctx2.fillStyle='rgba(63,208,138,1)';ctx2.fillRect(sx-sq,sy-sq,sq*2,sq*2);
+    ctx2.fillStyle='rgba(63,208,138,0.95)';ctx2.fillText('START',sx+12*DPR,sy-9*DPR);
+    // end marker
+    var ep=path(1),ex=PX(ep[0]),ey=PY(ep[1]);
+    ctx2.fillStyle='rgba(242,177,55,1)';ctx2.beginPath();ctx2.arc(ex,ey,6*DPR,0,Math.PI*2);ctx2.fill();
+    ctx2.fillStyle='rgba(138,160,189,0.9)';ctx2.fillText('ZIEL',ex-44*DPR,ey+4*DPR);
+  }
+
+  /* ---- Frontier-Exploration: echte Live-Simulation (Folie 13) ---- */
+  var SIM=(function(){
+    var COLS=40,ROWS=24;
+    var UNK=0,EXP=1,OCC=2;
+    var CAM_RANGE=9,CAM_FOV=Math.PI/2,LIDAR_RANGE=11,FOOT_R=1.2;
+    var POS_TOL=0.55,HEAD_TOL=5*Math.PI/180,SPEED=1.5,TURN=70*Math.PI/180;
+    var cv=document.getElementById('simCanvas');
+    var c=cv?cv.getContext('2d'):null;
+    var DPR=Math.max(1,Math.min(2,window.devicePixelRatio||1));
+    var CELL=10,offX=0,offY=0;
+    var walls,state,litter,robot,frontiers,cluster,waypoints,wpIdx,target;
+    var running=false,done=false,built=false,phase='Bereit',cmd='—';
+    var raf=null,last=0,banner=0,bannerTxt='',totalFree=0,speedVal=3,stepReq=false;
+
+    function blank(v){var g=[];for(var r=0;r<ROWS;r++){g.push(new Array(COLS).fill(v));}return g;}
+    function rect(g,x0,y0,x1,y1,v){for(var r=y0;r<=y1;r++)for(var cc=x0;cc<=x1;cc++)if(r>=0&&r<ROWS&&cc>=0&&cc<COLS)g[r][cc]=v;}
+
+    function build(){
+      walls=blank(false);
+      rect(walls,0,0,COLS-1,0,true);rect(walls,0,ROWS-1,COLS-1,ROWS-1,true);
+      rect(walls,0,0,0,ROWS-1,true);rect(walls,COLS-1,0,COLS-1,ROWS-1,true);
+      rect(walls,14,2,15,9,true);rect(walls,14,13,15,21,true);   // Trennwand mit Durchgang
+      rect(walls,24,15,31,19,true);                              // großer Kasten
+      rect(walls,27,4,34,5,true);                                // Regal
+      rect(walls,20,8,21,9,true);                                // Säule
+      state=blank(UNK);
+      litter=[{c:7,r:18},{c:19,r:5},{c:34,r:10},{c:28,r:21},{c:36,r:19}]
+        .filter(function(l){return !walls[l.r][l.c];})
+        .map(function(l){l.found=false;return l;});
+      robot={x:3.5,y:3.5,heading:0};
+      frontiers=[];cluster=[];waypoints=[];wpIdx=0;target=null;
+      done=false;phase='Bereit';cmd='—';stepReq=false;
+      totalFree=0;for(var r=0;r<ROWS;r++)for(var cc=0;cc<COLS;cc++)if(!walls[r][cc])totalFree++;
+      built=true;
+      sense();replan();phase='Bereit';
+    }
+
+    function losClear(x0,y0,x1,y1){
+      var dx=x1-x0,dy=y1-y0,steps=Math.ceil(Math.hypot(dx,dy)*2);
+      for(var i=1;i<steps;i++){var t=i/steps,cc=Math.floor(x0+dx*t),r=Math.floor(y0+dy*t);
+        if(r<0||r>=ROWS||cc<0||cc>=COLS)return false;if(walls[r][cc])return false;}
+      return true;
+    }
+    function markExp(cc,r){if(r>0&&r<ROWS-1&&cc>0&&cc<COLS-1&&!walls[r][cc]&&state[r][cc]!==OCC)state[r][cc]=EXP;}
+
+    function sense(){
+      var rx=robot.x,ry=robot.y,fr=Math.ceil(FOOT_R),r,cc;
+      for(r=Math.floor(ry-fr);r<=ry+fr;r++)for(cc=Math.floor(rx-fr);cc<=rx+fr;cc++){
+        if(r<0||r>=ROWS||cc<0||cc>=COLS)continue;
+        if(Math.hypot(cc+0.5-rx,r+0.5-ry)<=FOOT_R)markExp(cc,r);
+      }
+      var rng=CAM_RANGE;
+      for(r=Math.floor(ry-rng);r<=ry+rng;r++)for(cc=Math.floor(rx-rng);cc<=rx+rng;cc++){
+        if(r<0||r>=ROWS||cc<0||cc>=COLS)continue;
+        var cx=cc+0.5,cy=r+0.5,d=Math.hypot(cx-rx,cy-ry);if(d>rng)continue;
+        var da=Math.atan2(cy-ry,cx-rx)-robot.heading;da=Math.atan2(Math.sin(da),Math.cos(da));
+        if(Math.abs(da)>CAM_FOV/2)continue;if(!losClear(rx,ry,cx,cy))continue;if(walls[r][cc])continue;
+        markExp(cc,r);
+        for(var k=0;k<litter.length;k++){if(!litter[k].found&&litter[k].c===cc&&litter[k].r===r){litter[k].found=true;flash('Müll erkannt');}}
+      }
+      for(var a=0;a<Math.PI*2;a+=Math.PI/90){
+        var dxr=Math.cos(a),dyr=Math.sin(a);
+        for(var s=0.3;s<=LIDAR_RANGE;s+=0.34){var c2=Math.floor(rx+dxr*s),r2=Math.floor(ry+dyr*s);
+          if(r2<0||r2>=ROWS||c2<0||c2>=COLS)break;if(walls[r2][c2]){state[r2][c2]=OCC;break;}}
+      }
+    }
+
+    function computeFrontiers(){
+      var f=[],N=[[1,0],[-1,0],[0,1],[0,-1]];
+      for(var r=1;r<ROWS-1;r++)for(var cc=1;cc<COLS-1;cc++){
+        if(state[r][cc]!==UNK)continue;var edge=false;
+        for(var n=0;n<4;n++){if(state[r+N[n][1]][cc+N[n][0]]===EXP){edge=true;break;}}
+        if(edge)f.push([cc,r]);
+      }
+      return f;
+    }
+    function clusterF(f){
+      var key=function(cc,r){return cc+','+r;},set={},seen={},clusters=[],i;
+      for(i=0;i<f.length;i++)set[key(f[i][0],f[i][1])]=1;
+      var N=[[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+      for(i=0;i<f.length;i++){
+        var k0=key(f[i][0],f[i][1]);if(seen[k0])continue;
+        var q=[[f[i][0],f[i][1]]];seen[k0]=1;var cl=[];
+        while(q.length){var cur=q.pop();cl.push(cur);
+          for(var n=0;n<8;n++){var nc=cur[0]+N[n][0],nr=cur[1]+N[n][1],kk=key(nc,nr);
+            if(set[kk]&&!seen[kk]){seen[kk]=1;q.push([nc,nr]);}}}
+        clusters.push(cl);
+      }
+      return clusters;
+    }
+
+    function astar(sc,sr,gc,gr){
+      if(state[gr][gc]===OCC)return null;
+      var key=function(cc,r){return r*COLS+cc;};
+      var open={},came={},g={},h=function(cc,r){return Math.hypot(cc-gc,r-gr);};
+      var sk=key(sc,sr);g[sk]=0;open[sk]=h(sc,sr);
+      var N=[[1,0,1],[-1,0,1],[0,1,1],[0,-1,1],[1,1,1.41],[1,-1,1.41],[-1,1,1.41],[-1,-1,1.41]];
+      var guard=0;
+      while(guard++<20000){
+        var cur=null,best=Infinity,kk;
+        for(kk in open){if(open[kk]<best){best=open[kk];cur=kk;}}
+        if(cur===null)break;
+        cur=+cur;delete open[cur];
+        var cc=cur%COLS,cr=(cur-cc)/COLS;
+        if(cc===gc&&cr===gr){var path=[],kx=cur;
+          while(kx!==undefined){var c3=kx%COLS,r3=(kx-c3)/COLS;path.push([c3,r3]);kx=came[kx];}
+          return path.reverse();}
+        for(var n=0;n<8;n++){var dc=N[n][0],dr=N[n][1],w=N[n][2],nc=cc+dc,nr=cr+dr;
+          if(nc<1||nc>=COLS-1||nr<1||nr>=ROWS-1)continue;if(state[nr][nc]===OCC)continue;
+          if(dc&&dr&&(state[cr][nc]===OCC||state[nr][cc]===OCC))continue;
+          var nk=key(nc,nr),ng=g[cur]+w;
+          if(ng<(g[nk]===undefined?Infinity:g[nk])){came[nk]=cur;g[nk]=ng;open[nk]=ng+h(nc,nr);}}
+      }
+      return null;
+    }
+    function thin(path){
+      if(!path||path.length<3)return path||[];
+      var out=[path[0]],px=path[1][0]-path[0][0],py=path[1][1]-path[0][1];
+      for(var i=1;i<path.length-1;i++){var dx=path[i+1][0]-path[i][0],dy=path[i+1][1]-path[i][1];
+        if(dx!==px||dy!==py){out.push(path[i]);px=dx;py=dy;}}
+      out.push(path[path.length-1]);return out;
+    }
+
+    function replan(){
+      frontiers=computeFrontiers();
+      if(frontiers.length===0){done=true;running=false;phase='Exploration abgeschlossen';cmd='Stillstand';cluster=[];waypoints=[];target=null;flash('Exploration abgeschlossen',4000);return;}
+      var clusters=clusterF(frontiers),rc=Math.floor(robot.x),rr=Math.floor(robot.y);
+      var scored=clusters.map(function(cl){
+        var near=cl[0],nd=Infinity;
+        for(var i=0;i<cl.length;i++){var d=Math.hypot(cl[i][0]-rc,cl[i][1]-rr);if(d<nd){nd=d;near=cl[i];}}
+        return {cl:cl,near:near,score:nd/Math.log(1+cl.length*3)};
+      }).sort(function(a,b){return a.score-b.score;});
+      for(var i=0;i<scored.length;i++){
+        var path=astar(rc,rr,scored[i].near[0],scored[i].near[1]);
+        if(path&&path.length){
+          var t=thin(path);
+          waypoints=t.slice(1).map(function(p){return {c:p[0],r:p[1],x:p[0]+0.5,y:p[1]+0.5};});
+          if(waypoints.length===0)waypoints=[{c:scored[i].near[0],r:scored[i].near[1],x:scored[i].near[0]+0.5,y:scored[i].near[1]+0.5}];
+          wpIdx=0;cluster=scored[i].cl;target={c:scored[i].near[0],r:scored[i].near[1]};
+          phase='Pfad berechnet';cmd='A*: '+waypoints.length+' Wegpunkte';
+          if(stepReq){running=false;stepReq=false;}
+          return;
+        }
+      }
+      done=true;running=false;phase='Exploration abgeschlossen';flash('Exploration abgeschlossen',4000);
+    }
+
+    function drive(dt){
+      if(!waypoints.length){replan();return;}
+      var wp=waypoints[wpIdx];
+      if(state[wp.r][wp.c]===OCC){replan();return;}
+      var dx=wp.x-robot.x,dy=wp.y-robot.y,dist=Math.hypot(dx,dy);
+      if(dist<POS_TOL){wpIdx++;if(wpIdx>=waypoints.length)replan();return;}
+      var desired=Math.atan2(dy,dx),err=desired-robot.heading;err=Math.atan2(Math.sin(err),Math.cos(err));
+      if(Math.abs(err)>HEAD_TOL){
+        robot.heading+=(err>0?1:-1)*Math.min(Math.abs(err),TURN*dt);
+        phase='Fahre Wegpunkte ab';cmd='↻ drehen  z = '+((err>0?1:-1)*30).toFixed(0)+' deg/s';
+      }else{
+        var step=Math.min(dist,SPEED*dt);robot.x+=Math.cos(robot.heading)*step;robot.y+=Math.sin(robot.heading)*step;
+        phase='Fahre Wegpunkte ab';cmd='→ fahren  x = 0,20 m/s';
+      }
+    }
+
+    function size(){
+      if(!cv)return;var r=cv.getBoundingClientRect();if(!r.width||!r.height)return;
+      cv.width=r.width*DPR;cv.height=r.height*DPR;
+      CELL=Math.min(cv.width/COLS,cv.height/ROWS);offX=(cv.width-CELL*COLS)/2;offY=(cv.height-CELL*ROWS)/2;
+    }
+    function PX(cc){return offX+cc*CELL;}
+    function PY(r){return offY+r*CELL;}
+
+    function draw(ts){
+      if(!c)return;c.clearRect(0,0,cv.width,cv.height);
+      var r,cc;
+      for(r=0;r<ROWS;r++)for(cc=0;cc<COLS;cc++){var s=state[r][cc];if(s===UNK)continue;
+        c.fillStyle=(s===OCC)?'#3c5985':'rgba(63,208,138,0.22)';c.fillRect(PX(cc),PY(r),CELL+0.5,CELL+0.5);}
+      if(!done){var a=0.45+0.35*Math.sin(ts/260);c.fillStyle='rgba(91,155,240,'+a.toFixed(3)+')';
+        for(var i=0;i<frontiers.length;i++)c.fillRect(PX(frontiers[i][0])+CELL*0.18,PY(frontiers[i][1])+CELL*0.18,CELL*0.64,CELL*0.64);}
+      // Kamera-Fan
+      c.fillStyle='rgba(242,177,55,0.12)';c.strokeStyle='rgba(242,177,55,0.4)';c.lineWidth=1*DPR;
+      c.beginPath();c.moveTo(PX(robot.x),PY(robot.y));
+      c.arc(PX(robot.x),PY(robot.y),CAM_RANGE*CELL,robot.heading-CAM_FOV/2,robot.heading+CAM_FOV/2);
+      c.closePath();c.fill();c.stroke();
+      // A*-Pfad
+      if(waypoints.length&&!done){
+        c.strokeStyle='rgba(242,177,55,0.95)';c.lineWidth=2*DPR;c.setLineDash([6*DPR,5*DPR]);
+        c.beginPath();c.moveTo(PX(robot.x),PY(robot.y));
+        for(var w=wpIdx;w<waypoints.length;w++)c.lineTo(PX(waypoints[w].x),PY(waypoints[w].y));
+        c.stroke();c.setLineDash([]);
+        if(target){c.strokeStyle='rgba(91,155,240,0.95)';c.lineWidth=2*DPR;
+          c.beginPath();c.arc(PX(target.c+0.5),PY(target.r+0.5),CELL*0.7,0,7);c.stroke();}
+      }
+      // Müll
+      for(var m=0;m<litter.length;m++){if(!litter[m].found)continue;
+        var lx=PX(litter[m].c+0.5),ly=PY(litter[m].r+0.5),sz=CELL*0.32;
+        c.strokeStyle='rgba(240,88,74,1)';c.lineWidth=2.4*DPR;c.beginPath();
+        c.moveTo(lx-sz,ly-sz);c.lineTo(lx+sz,ly+sz);c.moveTo(lx+sz,ly-sz);c.lineTo(lx-sz,ly+sz);c.stroke();}
+      // Hund
+      var R=CELL*0.8;c.save();c.translate(PX(robot.x),PY(robot.y));c.rotate(robot.heading);
+      c.fillStyle='rgba(242,177,55,1)';c.beginPath();
+      var rx0=-R*0.7,ry0=-R*0.5,rw=R*1.4,rh=R,rr2=3*DPR;
+      c.moveTo(rx0+rr2,ry0);c.arcTo(rx0+rw,ry0,rx0+rw,ry0+rh,rr2);c.arcTo(rx0+rw,ry0+rh,rx0,ry0+rh,rr2);
+      c.arcTo(rx0,ry0+rh,rx0,ry0,rr2);c.arcTo(rx0,ry0,rx0+rw,ry0,rr2);c.closePath();c.fill();
+      c.fillStyle='#0e1622';c.beginPath();c.moveTo(R*0.75,0);c.lineTo(R*0.2,-R*0.32);c.lineTo(R*0.2,R*0.32);c.closePath();c.fill();
+      c.restore();
+    }
+
+    function hud(){
+      var ex=0,r,cc;for(r=0;r<ROWS;r++)for(cc=0;cc<COLS;cc++)if(state[r][cc]===EXP)ex++;
+      var found=0;for(var i=0;i<litter.length;i++)if(litter[i].found)found++;
+      var pct=Math.min(100,Math.round(ex/Math.max(1,totalFree)*100));
+      var set=function(id,v){var el=document.getElementById(id);if(el)el.textContent=v;};
+      set('simCov',pct+'%');set('simFront',done?0:frontiers.length);set('simLit',found+' / '+litter.length);
+      set('simPhase',phase);
+      var cm=document.getElementById('simCmd');if(cm)cm.textContent=banner>0?bannerTxt:('Befehl: '+cmd);
+      var dot=document.getElementById('simDot');if(dot)dot.style.opacity=running?1:0.3;
+      var pb=document.getElementById('simPlay');if(pb)pb.innerHTML=running?'⏸ Pause':'▶ Start';
+    }
+    function flash(txt,ms){banner=ms||1500;bannerTxt=txt;}
+
+    function loop(ts){
+      if(!last)last=ts;var dt=(ts-last)/1000;last=ts;dt=Math.min(dt,0.05)*speedVal;
+      if(running&&!done){sense();drive(dt);}
+      if(banner>0)banner-=dt*1000/speedVal*speedVal;
+      draw(ts);hud();
+      raf=requestAnimationFrame(loop);
+    }
+
+    function start(){
+      if(!cv)return;if(!built)build();size();last=0;running=!done;
+      if(raf===null)raf=requestAnimationFrame(loop);
+    }
+    function stop(){if(raf!==null){cancelAnimationFrame(raf);raf=null;}running=false;}
+    function reset(){build();size();running=true;}
+
+    if(cv){
+      var pb=document.getElementById('simPlay');
+      if(pb)pb.addEventListener('click',function(){if(done){reset();}else{running=!running;}});
+      var rb=document.getElementById('simReset');if(rb)rb.addEventListener('click',function(){reset();});
+      var sp=document.getElementById('simSpeed');if(sp)sp.addEventListener('input',function(e){speedVal=parseFloat(e.target.value);});
+    }
+    return {start:start,stop:stop,size:size,reset:reset};
+  })();
+
+  window.addEventListener('resize',function(){if(running){resize();}if(i===2){drawScenario();}if(i===12){SIM.size();}});
+
+  // init
+  go(0);
+})();
+</script>
